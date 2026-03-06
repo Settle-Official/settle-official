@@ -70,12 +70,12 @@ export function RightPanel({
     return "Connect wallet to preview payout";
   };
 
-  const getFxRateValue = () => {
-    if (!hasAmount) return "-";
-    if (isLoadingQuote) return "Loading...";
-    if (!quote?.rate) return "-";
-    return `${formatCurrencyPrefix(currency || quote?.currency || "NGN")} ${quote.rate.toFixed(2)} / USDC`;
-  };
+  // const getFxRateValue = () => {
+  //   if (!hasAmount) return "-";
+  //   if (isLoadingQuote) return "Loading...";
+  //   if (!quote?.rate) return "-";
+  //   return `${formatCurrencyPrefix(currency || quote?.currency || "NGN")} ${quote.rate.toFixed(2)} / USDC`;
+  // };
 
   const getPayoutTotal = () => {
     if (!hasAmount) return `${formatCurrencyPrefix(currency)} --`;
@@ -119,10 +119,10 @@ export function RightPanel({
         <h3 className="mt-0 mb-[0.65rem] font-bold font-space-grotesk text-[1.13rem]">
           SETTLEMENT BREAKDOWN
         </h3>
-        <div className="flex items-center justify-between py-[0.35rem] text-[0.72rem] text-[var(--muted)]">
+        {/* <div className="flex items-center justify-between py-[0.35rem] text-[0.72rem] text-[var(--muted)]">
           <span>FX Rate</span>
           <span className="text-white">{getFxRateValue()}</span>
-        </div>
+        </div> */}
         <div className="flex items-center justify-between py-[0.35rem] text-[0.72rem] text-[var(--muted)]">
           <span>Network fee</span>
           <span className="text-white">-</span>

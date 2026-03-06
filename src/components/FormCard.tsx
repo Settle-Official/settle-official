@@ -11,7 +11,20 @@ import {
 export interface FormCardProps {
   readonly isConnected: boolean;
   readonly isConnecting: boolean;
+  readonly isExecutingOfframp?: boolean;
   readonly onConnect: () => void;
+  readonly onInitiateOfframp?: (tradeData: {
+    amount: string;
+    rate: number;
+    token: string;
+    beneficiary: {
+      institution: string;
+      accountIdentifier: string;
+      accountName: string;
+      currency: string;
+      memo?: string;
+    };
+  }) => Promise<void> | void;
   readonly onPricingUpdate?: (data: {
     amount: string;
     quote: Quote | null;
@@ -69,7 +82,9 @@ function isValidQuote(data: unknown): data is Quote {
 export function FormCard({
   isConnected,
   isConnecting,
+  isExecutingOfframp = false,
   onConnect,
+  onInitiateOfframp,
   onPricingUpdate,
 }: Readonly<FormCardProps>) {
   const getCurrencyPrefix = (code?: string) =>
@@ -223,7 +238,7 @@ export function FormCard({
             throw new Error("Invalid rate or bridge quote payload");
           }
 
-          const destinationAmount = (receivedAmount * rate * 0.995).toFixed(2); // 0.5% platform fee
+          const destinationAmount = (receivedAmount * rate * 0.99).toFixed(2); // 1% platform fee
           const directQuote: Quote = {
             quoteId: `quote_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
             sourceAmount: amount,
@@ -257,9 +272,42 @@ export function FormCard({
   }, [amount, quote, isLoadingQuote, currency, onPricingUpdate]);
 
   const getButtonText = () => {
+    if (isExecutingOfframp) return "INITIATING OFFRAMP...";
     if (isConnecting) return "WAITING FOR SIGNATURE...";
     if (isConnected) return "INITIATE OFFRAMP →";
     return "CONNECT WALLET";
+  };
+
+  const canInitiateOfframp =
+    isConnected &&
+    !isConnecting &&
+    !isExecutingOfframp &&
+    !!quote &&
+    Number.parseFloat(amount) >= 0.7 &&
+    accountNumber.length === 10 &&
+    !!bank &&
+    !!accountName;
+
+  const handlePrimaryAction = async () => {
+    if (!isConnected) {
+      onConnect();
+      return;
+    }
+
+    if (!canInitiateOfframp || !quote || !onInitiateOfframp) return;
+
+    await onInitiateOfframp({
+      amount,
+      rate: quote.rate,
+      token: "USDC",
+      beneficiary: {
+        institution: bank,
+        accountIdentifier: accountNumber,
+        accountName,
+        currency,
+        memo: "Stellaramp offramp",
+      },
+    });
   };
 
   return (
@@ -333,7 +381,8 @@ export function FormCard({
               {getCurrencyPrefix(quote.currency)}{quote.destinationAmount}
             </div>
             <div className="text-[0.7rem] text-[var(--muted)] mt-1">
-              Rate: {getCurrencyPrefix(quote.currency)}{Number.isFinite(quote.rate) ? quote.rate.toFixed(2) : "-"} / USDC • Est. time: 5 min
+              {/* Rate: {getCurrencyPrefix(quote.currency)}{Number.isFinite(quote.rate) ? quote.rate.toFixed(2) : "-"} / USDC • Est. time: 5 min */}
+              Est. time: 5 min
             </div>
           </div>
         )}
@@ -341,12 +390,12 @@ export function FormCard({
 
       <button
         type="button"
-        onClick={onConnect}
-        disabled={isConnecting}
+        onClick={handlePrimaryAction}
+        disabled={!isConnected ? isConnecting || isExecutingOfframp : !canInitiateOfframp}
         className={cn(
           "h-12 font-bold uppercase tracking-[0.08em] transition-colors",
           !isConnected && !isConnecting && "bg-[var(--accent)] text-[#0a0a0a] hover:brightness-110",
-          isConnecting && "bg-[#2f2f2f] text-[var(--muted)] cursor-not-allowed",
+          (isConnecting || isExecutingOfframp) && "bg-[#2f2f2f] text-[var(--muted)] cursor-not-allowed",
           isConnected && "bg-[#efefef] text-[#0a0a0a] hover:brightness-95",
         )}
       >

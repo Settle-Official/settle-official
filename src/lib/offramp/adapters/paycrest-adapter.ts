@@ -20,7 +20,10 @@ export class PaycrestAdapter implements PayoutProviderAdapter {
     endpoint: string,
     options: RequestInit = {}
   ): Promise<T> {
-    const response = await fetch(`${PAYCREST_API_BASE}${endpoint}`, {
+    const url = `${PAYCREST_API_BASE}${endpoint}`;
+    console.log(`Paycrest API request: ${options.method || 'GET'} ${url}`);
+    
+    const response = await fetch(url, {
       ...options,
       headers: {
         "Content-Type": "application/json",
@@ -31,12 +34,19 @@ export class PaycrestAdapter implements PayoutProviderAdapter {
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
+      console.error(`Paycrest API error (${response.status}):`, {
+        endpoint,
+        status: response.status,
+        statusText: response.statusText,
+        error,
+      });
       throw new Error(
-        error.message || `Paycrest API error: ${response.statusText}`
+        error.message || `Paycrest API error: ${response.status} ${response.statusText}`
       );
     }
 
     const data = await response.json();
+    console.log(`Paycrest API response from ${endpoint}:`, data);
     return data.data || data;
   }
 

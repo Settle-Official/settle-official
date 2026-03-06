@@ -3,6 +3,8 @@ export interface HeaderProps {
   readonly isConnected: boolean;
   readonly isConnecting: boolean;
   readonly walletAddress?: string;
+  readonly stellarUsdcBalance?: string | null;
+  readonly isBalanceLoading?: boolean;
   readonly onConnect: () => void;
   readonly onDisconnect: () => void;
 }
@@ -12,6 +14,8 @@ export function Header({
   isConnected,
   isConnecting,
   walletAddress,
+  stellarUsdcBalance,
+  isBalanceLoading = false,
   onConnect,
   onDisconnect,
 }: Readonly<HeaderProps>) {
@@ -31,14 +35,23 @@ export function Header({
           {subtitle}
         </p>
       </div>
-      <button
-        type="button"
-        onClick={isConnected ? onDisconnect : onConnect}
-        disabled={isConnecting}
-        className="border-2 border-[var(--accent)] px-4 py-[0.7rem] text-[0.62rem] uppercase tracking-[0.08em] rounded-none bg-transparent hover:bg-[var(--accent)] hover:text-[#0a0a0a] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]/60 disabled:opacity-60 disabled:cursor-not-allowed"
-      >
-        {buttonText}
-      </button>
+      <div>
+        <button
+          type="button"
+          onClick={isConnected ? onDisconnect : onConnect}
+          disabled={isConnecting}
+          className="border-2 border-[var(--accent)] px-4 py-[0.7rem] text-[0.62rem] uppercase tracking-[0.08em] rounded-none bg-transparent hover:bg-[var(--accent)] hover:text-[#0a0a0a] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]/60 disabled:opacity-60 disabled:cursor-not-allowed"
+        >
+          {buttonText}
+        </button>
+        {isConnected ? (
+          <p className="mt-2 text-right text-[0.85rem] text-[var(--muted)]">
+            {isBalanceLoading
+              ? "USDC Balance: loading..."
+              : `USDC Balance: ${stellarUsdcBalance ?? "0.00"}`}
+          </p>
+        ) : null}
+      </div>
     </header>
   );
 }

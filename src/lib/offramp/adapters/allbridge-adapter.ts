@@ -41,11 +41,29 @@ export async function initializeAllbridgeSdk() {
   const { AllbridgeCoreSdk, nodeRpcUrlsDefault } = await import(
     "@allbridge/bridge-core-sdk"
   );
-  
+
+  const legacyRpcUrl = process.env.STELLAR_RPC_URL;
+  const legacyOverrides =
+    legacyRpcUrl && legacyRpcUrl.includes("horizon")
+      ? { STLR: legacyRpcUrl }
+      : legacyRpcUrl
+        ? { SRB: legacyRpcUrl }
+        : {};
+
+  // Important: in Allbridge SDK, SRB is Stellar Soroban RPC and STLR is Horizon.
+  // Pointing SRB to Horizon causes 405 (POST /) during rawTxBuilder.send().
   const rpcUrls = {
     ...nodeRpcUrlsDefault,
-    SRB: process.env.STELLAR_RPC_URL || "https://horizon.stellar.org",
+    // Use a widely available public mainnet Stellar RPC by default.
+    SRB: process.env.STELLAR_SOROBAN_RPC_URL || "https://soroban-rpc.mainnet.stellar.gateway.fm",
+    STLR: process.env.STELLAR_HORIZON_URL || "https://horizon.stellar.org",
+    ...legacyOverrides,
   };
+
+  console.log("Initializing Allbridge SDK with RPC URLs:", {
+    SRB: rpcUrls.SRB,
+    STLR: rpcUrls.STLR,
+  });
 
   return new AllbridgeCoreSdk(rpcUrls);
 }
@@ -97,18 +115,58 @@ export async function buildAllbridgeSendTx(
     destinationToken: any;
   }
 ): Promise<string> {
-  // Build the transaction XDR for Stellar
-  const rawTx = await sdk.bridge.rawTxBuilder.send({
-    amount: params.amount,
-    fromAccountAddress: params.fromAddress,
-    toAccountAddress: params.toAddress,
-    sourceToken: params.sourceToken,
-    destinationToken: params.destinationToken,
-    messenger: "ALLBRIDGE",
-  });
+  const { Messenger } = await import("@allbridge/bridge-core-sdk");
 
-  // For Stellar, rawTx is the XDR string
-  return rawTx;
+  try {
+    console.log("Building Allbridge send transaction with params:", {
+      amount: params.amount,
+      fromAddress: params.fromAddress,
+      toAddress: params.toAddress,
+      sourceTokenSymbol: params.sourceToken?.symbol,
+      destinationTokenSymbol: params.destinationToken?.symbol,
+    });
+
+    // Check if approval is needed (for Stellar, this might not be required)
+    // But we'll check anyway to be safe
+    try {
+      const needsApproval = !(await sdk.bridge.checkAllowance({
+        token: params.sourceToken,
+        owner: params.fromAddress,
+        amount: params.amount,
+      }));
+
+      if (needsApproval) {
+        console.log("Approval needed for Allbridge transfer");
+        // For Stellar, approval might be handled differently or not needed
+        // We'll let the transaction build proceed
+      }
+    } catch (approvalError: any) {
+      console.warn("Could not check allowance (might not be needed for Stellar):", approvalError.message);
+      // Continue anyway - Stellar might not need approval
+    }
+
+    // Build the transaction XDR for Stellar
+    const rawTx = await sdk.bridge.rawTxBuilder.send({
+      amount: params.amount,
+      fromAccountAddress: params.fromAddress,
+      toAccountAddress: params.toAddress,
+      sourceToken: params.sourceToken,
+      destinationToken: params.destinationToken,
+      messenger: Messenger.ALLBRIDGE,
+    });
+
+    console.log("Successfully built Allbridge transaction, XDR length:", rawTx?.length);
+
+    // For Stellar, rawTx is the XDR string
+    return rawTx;
+  } catch (error: any) {
+    console.error("Error in buildAllbridgeSendTx:", {
+      message: error.message,
+      stack: error.stack,
+      response: error.response?.data,
+    });
+    throw new Error(`Failed to build Allbridge transaction: ${error.message}`);
+  }
 }
 
 export async function getAllbridgeTransferStatus(

@@ -1,4 +1,4 @@
-# Stellaramp Next
+# Stellaramp
 
 Stellaramp is a Next.js offramp app that converts **Stellar USDC** to **Naira bank payout** using:
 - **Allbridge** for bridge flow (Stellar -> Base)
@@ -47,7 +47,9 @@ Set values in `.env.local`:
 - `BASE_PRIVATE_KEY`
 - `BASE_RETURN_ADDRESS`
 - `BASE_RPC_URL` (optional, defaults to `https://mainnet.base.org`)
-- `STELLAR_RPC_URL` (optional)
+- `STELLAR_SOROBAN_RPC_URL` (optional, defaults to `https://soroban-rpc.mainnet.stellar.gateway.fm`)
+- `STELLAR_HORIZON_URL` (optional, defaults to `https://horizon.stellar.org`)
+- `STELLAR_RPC_URL` (legacy optional fallback)
 - `NEXT_PUBLIC_BASE_RETURN_ADDRESS`
 
 ### 3. Run
