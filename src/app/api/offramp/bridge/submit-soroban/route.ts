@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as StellarSdk from "@stellar/stellar-sdk";
 
+// Allow up to 15s for sendTransaction RPC call
+export const maxDuration = 15;
+
 /**
  * Submit a signed Soroban transaction directly to the Stellar Soroban RPC.
  *
@@ -185,57 +188,20 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // ---- 2. If PENDING, poll getTransaction until resolved ----
+    // ---- 2. If PENDING, return immediately with hash — client will poll ----
+    //
+    // On Vercel, serverless functions have a short timeout (10s hobby, 60s pro).
+    // Instead of polling here for 90s, return the hash + PENDING status so the
+    // client can poll a lightweight /tx-status endpoint.
     if (sendStatus === "PENDING") {
-      const maxWait = 90; // seconds
-      const interval = 3; // seconds between polls
-      const attempts = Math.ceil(maxWait / interval);
-
-      for (let i = 0; i < attempts; i++) {
-        await new Promise((r) => setTimeout(r, interval * 1000));
-
-        const txResult = await sorobanRpc("getTransaction", { hash });
-        console.log(
-          "[submit-soroban] poll %d/%d status=%s",
-          i + 1,
-          attempts,
-          txResult?.status,
-        );
-
-        if (txResult?.status === "NOT_FOUND") continue;
-
-        if (txResult?.status === "SUCCESS") {
-          console.log("[submit-soroban] Transaction confirmed:", hash);
-          return NextResponse.json({ hash, status: "SUCCESS" });
-        }
-
-        if (txResult?.status === "FAILED") {
-          console.error(
-            "[submit-soroban] Transaction failed on-chain:",
-            safeJson(txResult),
-          );
-          return NextResponse.json(
-            { error: "Soroban transaction failed on-chain", details: txResult },
-            { status: 400 },
-          );
-        }
-      }
-
-      // Transaction never confirmed — treat as failure so the client
-      // does NOT proceed to poll bridge/payout.
-      console.error(
-        "[submit-soroban] Transaction NOT confirmed after %ds — treating as failed. hash=%s",
-        maxWait,
+      console.log(
+        "[submit-soroban] Transaction PENDING — returning hash for client-side polling:",
         hash,
       );
-      return NextResponse.json(
-        {
-          error: `Transaction was not confirmed within ${maxWait}s. It may have expired or been rejected by validators.`,
-          hash,
-          status: "TIMEOUT",
-        },
-        { status: 504 },
-      );
+      return NextResponse.json({
+        hash,
+        status: "PENDING",
+      });
     }
 
     // Already SUCCESS or some other terminal status

@@ -407,18 +407,61 @@ export function StellarampDashboard() {
               )}`,
           );
         }
-        if (submitPayload?.status !== "SUCCESS") {
-          throw new Error(
-            `Transaction not confirmed (status: ${submitPayload?.status}). ` +
-              (submitPayload?.error || "Please try again."),
-          );
-        }
         if (!submitPayload?.hash) {
           throw new Error(
             `Soroban submit missing hash: ${safeJson(submitPayload)}`,
           );
         }
+
         stellarTxHash = submitPayload.hash;
+
+        // If PENDING, poll the lightweight tx-status endpoint from the client
+        // instead of relying on server-side polling (avoids Vercel timeout).
+        if (submitPayload?.status === "PENDING") {
+          console.log(
+            "[submit] Transaction PENDING — polling tx-status from client...",
+          );
+          const maxPollAttempts = 30; // 30 × 3s = 90s
+          let confirmed = false;
+
+          for (let i = 0; i < maxPollAttempts; i++) {
+            await new Promise((r) => setTimeout(r, 3000));
+            try {
+              const statusRes = await fetch(
+                `/api/offramp/bridge/tx-status/${stellarTxHash}`,
+              );
+              const statusData = await statusRes.json().catch(() => ({}));
+              console.log(
+                `[submit] tx-status poll ${i + 1}/${maxPollAttempts}: ${statusData?.status}`,
+              );
+
+              if (statusData?.status === "SUCCESS") {
+                confirmed = true;
+                break;
+              }
+              if (statusData?.status === "FAILED") {
+                throw new Error(
+                  "Transaction failed on-chain. Your wallet was not debited.",
+                );
+              }
+              // NOT_FOUND — keep polling
+            } catch (pollErr: any) {
+              if (pollErr?.message?.includes("failed on-chain")) throw pollErr;
+              console.warn("[submit] tx-status poll error:", pollErr.message);
+            }
+          }
+
+          if (!confirmed) {
+            throw new Error(
+              "Transaction was not confirmed within 90s. It may have expired. Your wallet was likely not debited.",
+            );
+          }
+        } else if (submitPayload?.status !== "SUCCESS") {
+          throw new Error(
+            `Transaction not confirmed (status: ${submitPayload?.status}). ` +
+              (submitPayload?.error || "Please try again."),
+          );
+        }
       } else if (signedTx) {
         // Classic tx path
         const server = new StellarSdk.Horizon.Server(
@@ -494,7 +537,8 @@ export function StellarampDashboard() {
       });
       setUserTransactions(TransactionStorage.getByUser(wallet.publicKey));
 
-      throw error;
+      // Don't re-throw — the modal already shows the error to the user.
+      // Re-throwing would cause an unhandled promise rejection.
     } finally {
       setIsExecutingOfframp(false);
       setCurrentTxId(null);
