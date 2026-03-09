@@ -50,6 +50,7 @@ interface Quote {
   destinationAmount: string;
   rate: number;
   currency: string;
+  estimatedTimeMs: number;
 }
 
 const PAYCREST_API_BASE = "https://api.paycrest.io/v1";
@@ -75,8 +76,22 @@ function isValidQuote(data: unknown): data is Quote {
     typeof candidate.destinationAmount === "string" &&
     typeof candidate.currency === "string" &&
     typeof candidate.rate === "number" &&
-    Number.isFinite(candidate.rate)
+    Number.isFinite(candidate.rate) &&
+    typeof candidate.estimatedTimeMs === "number" &&
+    Number.isFinite(candidate.estimatedTimeMs)
   );
+}
+
+function formatEstimatedTime(estimatedTimeMs: number): string {
+  if (!Number.isFinite(estimatedTimeMs) || estimatedTimeMs <= 0) {
+    return "-";
+  }
+  const totalSeconds = Math.max(1, Math.round(estimatedTimeMs / 1000));
+  if (totalSeconds < 60) {
+    return `${totalSeconds} sec`;
+  }
+  const totalMinutes = Math.ceil(totalSeconds / 60);
+  return `${totalMinutes} min`;
 }
 
 export function FormCard({
@@ -245,6 +260,7 @@ export function FormCard({
             destinationAmount,
             rate,
             currency,
+            estimatedTimeMs: bridgeQuote.estimatedTime,
           };
 
           if (!isValidQuote(directQuote)) {
@@ -381,8 +397,7 @@ export function FormCard({
               {getCurrencyPrefix(quote.currency)}{quote.destinationAmount}
             </div>
             <div className="text-[0.7rem] text-[var(--muted)] mt-1">
-              {/* Rate: {getCurrencyPrefix(quote.currency)}{Number.isFinite(quote.rate) ? quote.rate.toFixed(2) : "-"} / USDC • Est. time: 5 min */}
-              Est. time: 5 min
+              Est. time: {formatEstimatedTime(quote.estimatedTimeMs)}
             </div>
           </div>
         )}

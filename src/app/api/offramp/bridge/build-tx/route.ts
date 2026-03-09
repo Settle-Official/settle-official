@@ -2,86 +2,116 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   initializeAllbridgeSdk,
   getAllbridgeTokens,
-  buildAllbridgeSendTx,
 } from "@/lib/offramp/adapters/allbridge-adapter";
-import { validateAmount, validateAddress } from "@/lib/offramp/utils/validation";
+import {
+  buildSwapAndBridgeTx,
+  getAllbridgeGasFee,
+} from "@/lib/offramp/adapters/soroban-tx-builder";
+import {
+  validateAmount,
+  validateAddress,
+} from "@/lib/offramp/utils/validation";
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { amount, fromAddress, toAddress } = body;
 
-    console.log("Build-tx request received:", { amount, fromAddress, toAddress });
+    console.log("[build-tx] Request received:", {
+      amount,
+      fromAddress,
+      toAddress,
+    });
 
     // Validation
     if (!validateAmount(amount)) {
-      return NextResponse.json(
-        { error: "Invalid amount" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Invalid amount" }, { status: 400 });
     }
 
     if (!validateAddress(fromAddress, "stellar")) {
       return NextResponse.json(
         { error: "Invalid Stellar address" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
     if (!validateAddress(toAddress, "base")) {
       return NextResponse.json(
         { error: "Invalid Base address" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
-    console.log("Validation passed, initializing Allbridge SDK...");
+    console.log("[build-tx] Validation passed, initializing Allbridge SDK...");
 
-    // Initialize Allbridge SDK
+    // Use Allbridge SDK only for metadata & fee calculation
     const sdk = await initializeAllbridgeSdk();
-    
-    console.log("SDK initialized, fetching tokens...");
-    
     const tokens = await getAllbridgeTokens(sdk);
 
     if (!tokens.stellar.usdc || !tokens.base.usdc) {
       throw new Error("USDC tokens not found on Allbridge");
     }
 
-    console.log("Tokens found:", {
-      stellarUSDC: tokens.stellar.usdc.symbol,
-      baseUSDC: tokens.base.usdc.symbol,
+    const stellarUsdc = tokens.stellar.usdc;
+    const baseUsdc = tokens.base.usdc;
+
+    console.log("[build-tx] Tokens found:", {
+      stellarUSDC: stellarUsdc.symbol,
+      baseUSDC: baseUsdc.symbol,
+      bridgeAddress: stellarUsdc.bridgeAddress,
+      stellarTokenAddress: stellarUsdc.tokenAddress,
+      baseTokenAddress: baseUsdc.tokenAddress,
+      destinationChainId: baseUsdc.allbridgeChainId,
     });
 
-    // Build transaction XDR
-    console.log("Building transaction XDR...");
-    const xdr = await buildAllbridgeSendTx(sdk, {
-      amount,
+    // Get gas fee from Allbridge API (prefers stablecoin payment to avoid
+    // requiring the user to hold extra XLM for the bridge gas fee).
+    const feeInfo = await getAllbridgeGasFee(sdk, stellarUsdc, baseUsdc);
+    console.log("[build-tx] Fee info:", feeInfo);
+
+    // Build the Soroban transaction using the project's up-to-date stellar-sdk
+    // (instead of the Allbridge SDK's bundled stellar-sdk@13.3.0 which only
+    //  supports Protocol 21 – the network is now on Protocol 25).
+    const xdr = await buildSwapAndBridgeTx({
+      bridgeContractId: stellarUsdc.bridgeAddress,
       fromAddress,
       toAddress,
-      sourceToken: tokens.stellar.usdc,
-      destinationToken: tokens.base.usdc,
+      sourceTokenAddress: stellarUsdc.tokenAddress,
+      sourceTokenDecimals: stellarUsdc.decimals,
+      destinationTokenAddress: baseUsdc.tokenAddress,
+      destinationChainId: baseUsdc.allbridgeChainId,
+      amount,
+      gasAmount: feeInfo.gasAmount,
+      feeTokenAmount: feeInfo.feeTokenAmount,
     });
 
-    console.log("Transaction built successfully");
+    if (!xdr || typeof xdr !== "string") {
+      throw new Error("Transaction builder returned empty or non-string XDR");
+    }
+
+    console.log(
+      "[build-tx] Transaction built successfully, XDR length:",
+      xdr.length,
+    );
 
     return NextResponse.json({
       xdr,
-      sourceToken: tokens.stellar.usdc.symbol,
-      destinationToken: tokens.base.usdc.symbol,
+      sourceToken: stellarUsdc.symbol,
+      destinationToken: baseUsdc.symbol,
     });
   } catch (error: any) {
-    console.error("Build transaction error:", {
+    console.error("[build-tx] Error:", {
       message: error.message,
       stack: error.stack,
       name: error.name,
     });
     return NextResponse.json(
-      { 
+      {
         error: error.message || "Failed to build transaction",
-        details: process.env.NODE_ENV === "development" ? error.stack : undefined
+        details:
+          process.env.NODE_ENV === "development" ? error.stack : undefined,
       },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

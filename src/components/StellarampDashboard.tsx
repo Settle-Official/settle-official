@@ -16,6 +16,51 @@ import {
   initializeAllbridgeSdk,
 } from "@/lib/offramp/adapters/allbridge-adapter";
 
+function safeJson(value: unknown): string {
+  try {
+    return JSON.stringify(
+      value,
+      (_key, v) => (typeof v === "bigint" ? v.toString() : v),
+      2,
+    );
+  } catch {
+    return String(value);
+  }
+}
+
+function decodeTxResultCode(errorResultXdr?: string): string | null {
+  if (!errorResultXdr) return null;
+  try {
+    const txResult = StellarSdk.xdr.TransactionResult.fromXDR(
+      errorResultXdr,
+      "base64",
+    );
+    const txCode = txResult.result().switch().name;
+    const opResults = txResult.result().results();
+    const firstOpCode =
+      opResults && opResults.length > 0
+        ? opResults[0]?.tr()?.switch()?.name
+        : undefined;
+    return firstOpCode ? `${txCode}/${firstOpCode}` : txCode;
+  } catch {
+    return null;
+  }
+}
+
+function formatSorobanError(payload: any): string {
+  if (!payload) return "Unknown Soroban error";
+  const txCode = decodeTxResultCode(payload.errorResultXdr);
+  const status = payload.status ? `status=${payload.status}` : null;
+  const code = txCode ? `txCode=${txCode}` : null;
+  const message =
+    payload.error?.message ||
+    payload.errorResult?.message ||
+    payload.detail ||
+    null;
+  const raw = safeJson(payload);
+  return [status, code, message, `raw=${raw}`].filter(Boolean).join(" | ");
+}
+
 export function StellarampDashboard() {
   const {
     wallet,
@@ -37,7 +82,7 @@ export function StellarampDashboard() {
   }>({});
   const [userTransactions, setUserTransactions] = useState<Transaction[]>([]);
   const [stellarUsdcBalance, setStellarUsdcBalance] = useState<string | null>(
-    null
+    null,
   );
   const [isLoadingBalance, setIsLoadingBalance] = useState(false);
   const [pricingState, setPricingState] = useState<{
@@ -46,6 +91,7 @@ export function StellarampDashboard() {
       destinationAmount: string;
       rate: number;
       currency: string;
+      estimatedTimeMs: number;
     } | null;
     isLoadingQuote: boolean;
     currency: string;
@@ -75,14 +121,16 @@ export function StellarampDashboard() {
       setIsLoadingBalance(true);
       try {
         const response = await fetch(
-          `https://horizon.stellar.org/accounts/${wallet.publicKey}`
+          `https://horizon.stellar.org/accounts/${wallet.publicKey}`,
         );
         if (!response.ok) {
           throw new Error(`Horizon account request failed: ${response.status}`);
         }
 
         const account = await response.json();
-        const balances = Array.isArray(account?.balances) ? account.balances : [];
+        const balances = Array.isArray(account?.balances)
+          ? account.balances
+          : [];
         const preferredIssuer = process.env.NEXT_PUBLIC_STELLAR_USDC_ISSUER;
 
         const usdcTrustline = balances.find((balance: any) => {
@@ -184,22 +232,24 @@ export function StellarampDashboard() {
         sdk,
         tokens.stellar.usdc,
         tokens.base.usdc,
-        tradeData.amount
+        tradeData.amount,
       );
       const paycrestOrderAmount = Number.parseFloat(bridgeQuote.receiveAmount);
       if (!Number.isFinite(paycrestOrderAmount) || paycrestOrderAmount <= 0) {
         throw new Error("Invalid bridge receive amount for payout order");
       }
+      const normalizedOrderAmount = Number(paycrestOrderAmount.toFixed(6));
+      const normalizedRate = Number(tradeData.rate.toFixed(6));
 
       // 2) Create Paycrest order first via internal API route (avoids browser CORS/key exposure)
       const orderResponse = await fetch("/api/offramp/paycrest/order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          amount: paycrestOrderAmount,
+          amount: normalizedOrderAmount,
           token: tradeData.token,
           network: "base",
-          rate: tradeData.rate,
+          rate: normalizedRate,
           reference: txId,
           recipient: {
             institution: tradeData.beneficiary.institution,
@@ -213,17 +263,33 @@ export function StellarampDashboard() {
       });
       if (!orderResponse.ok) {
         const payload = await orderResponse.json().catch(() => ({}));
-        throw new Error(payload?.message || `Paycrest order failed: ${orderResponse.status}`);
+        const details =
+          payload?.details && typeof payload.details === "object"
+            ? ` | details=${JSON.stringify(payload.details)}`
+            : payload?.details
+              ? ` | details=${String(payload.details)}`
+              : "";
+        throw new Error(
+          `${payload?.message || payload?.error || `Paycrest order failed: ${orderResponse.status}`}${details}`,
+        );
       }
       const orderPayload = await orderResponse.json();
       const paycrestOrder = orderPayload?.data || orderPayload;
       const payoutOrderId: string | undefined = paycrestOrder?.id;
-      const settlementAddress: string | undefined = paycrestOrder?.receiveAddress;
+      const settlementAddress: string | undefined =
+        paycrestOrder?.receiveAddress;
       if (!payoutOrderId || !settlementAddress) {
         throw new Error("Paycrest order response missing id/receiveAddress");
       }
-      setTradeState((prev) => ({ ...prev, payoutOrderId, payoutStatus: "pending" }));
-      TransactionStorage.update(txId, { payoutOrderId, payoutStatus: "pending" });
+      setTradeState((prev) => ({
+        ...prev,
+        payoutOrderId,
+        payoutStatus: "pending",
+      }));
+      TransactionStorage.update(txId, {
+        payoutOrderId,
+        payoutStatus: "pending",
+      });
       setUserTransactions(TransactionStorage.getByUser(wallet.publicKey));
 
       // 3) Build Allbridge tx to Paycrest settlement wallet (server route to avoid client RPC issues)
@@ -239,7 +305,8 @@ export function StellarampDashboard() {
       if (!buildTxResponse.ok) {
         const payload = await buildTxResponse.json().catch(() => ({}));
         throw new Error(
-          payload?.error || `Failed to build bridge transaction: ${buildTxResponse.status}`
+          payload?.error ||
+            `Failed to build bridge transaction: ${buildTxResponse.status}`,
         );
       }
       const buildTxPayload = await buildTxResponse.json();
@@ -252,18 +319,92 @@ export function StellarampDashboard() {
       const signedXdr = await signTransaction(xdr);
 
       // 5) Submit to Stellar network
-      const server = new StellarSdk.Horizon.Server("https://horizon.stellar.org");
-      const transaction = StellarSdk.TransactionBuilder.fromXDR(
-        signedXdr,
-        StellarSdk.Networks.PUBLIC
-      );
-      const result = await server.submitTransaction(transaction as any);
+      console.log("Submitting transaction to Stellar network...");
+      let stellarTxHash: string;
 
-      const stellarTxHash = result.hash;
-      setTradeState((prev) => ({ ...prev, stellarTxHash, bridgeStatus: "pending" }));
-      
+      // Detect Soroban ops safely – default to Soroban path since Allbridge
+      // bridge txs are always invokeHostFunction.
+      let hasSorobanOps = true;
+      let signedTx:
+        | StellarSdk.Transaction
+        | StellarSdk.FeeBumpTransaction
+        | null = null;
+      try {
+        signedTx = StellarSdk.TransactionBuilder.fromXDR(
+          signedXdr,
+          StellarSdk.Networks.PUBLIC,
+        );
+        if ("operations" in signedTx) {
+          hasSorobanOps = signedTx.operations.some(
+            (op: any) => op.type === "invokeHostFunction",
+          );
+        }
+      } catch (parseErr) {
+        console.warn(
+          "Could not parse signed XDR to detect op types; defaulting to Soroban path:",
+          parseErr,
+        );
+      }
+
+      if (hasSorobanOps) {
+        // Submit via server route which forwards raw XDR to the Soroban RPC
+        // (no SDK re-serialisation – avoids stellar-base version mismatch).
+        const submitResponse = await fetch(
+          "/api/offramp/bridge/submit-soroban",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ signedXdr }),
+          },
+        );
+        const submitPayload = await submitResponse.json().catch(() => ({}));
+        console.log(
+          "[submit] Response:",
+          submitResponse.status,
+          submitPayload?.status,
+        );
+        if (!submitResponse.ok) {
+          throw new Error(
+            submitPayload?.error ||
+              `Soroban transaction error: ${formatSorobanError(
+                submitPayload?.details || submitPayload,
+              )}`,
+          );
+        }
+        if (submitPayload?.status !== "SUCCESS") {
+          throw new Error(
+            `Transaction not confirmed (status: ${submitPayload?.status}). ` +
+              (submitPayload?.error || "Please try again."),
+          );
+        }
+        if (!submitPayload?.hash) {
+          throw new Error(
+            `Soroban submit missing hash: ${safeJson(submitPayload)}`,
+          );
+        }
+        stellarTxHash = submitPayload.hash;
+      } else if (signedTx) {
+        // Classic tx path
+        const server = new StellarSdk.Horizon.Server(
+          "https://horizon.stellar.org",
+        );
+        const result = await server.submitTransaction(signedTx);
+        stellarTxHash = result.hash;
+      } else {
+        throw new Error("Unable to parse or submit signed transaction");
+      }
+
+      setTradeState((prev) => ({
+        ...prev,
+        stellarTxHash,
+        bridgeStatus: "pending",
+      }));
+
       // Update transaction with tx hash
-      TransactionStorage.update(txId, { stellarTxHash, bridgeStatus: "pending" });
+      TransactionStorage.update(txId, {
+        stellarTxHash,
+        bridgeStatus: "pending",
+      });
       setUserTransactions(TransactionStorage.getByUser(wallet.publicKey));
 
       // 6) Poll bridge + payout status
@@ -275,15 +416,28 @@ export function StellarampDashboard() {
       // Mark as completed
       TransactionStorage.update(txId, { status: "completed" });
       setUserTransactions(TransactionStorage.getByUser(wallet.publicKey));
-
     } catch (error: any) {
       console.error("Trade execution error:", error);
+
+      // Log detailed Horizon error if available
+      if (error?.response?.data) {
+        console.error("Horizon error details:", {
+          status: error.response.status,
+          title: error.response.data.title,
+          detail: error.response.data.detail,
+          extras: error.response.data.extras,
+        });
+      }
+
       setTradeState((prev) => ({ ...prev, error: error.message }));
-      
+
       // Mark as failed
-      TransactionStorage.update(txId, { status: "failed", error: error.message });
+      TransactionStorage.update(txId, {
+        status: "failed",
+        error: error.message,
+      });
       setUserTransactions(TransactionStorage.getByUser(wallet.publicKey));
-      
+
       throw error;
     } finally {
       setIsExecutingOfframp(false);
@@ -333,7 +487,10 @@ export function StellarampDashboard() {
       TransactionStorage.update(txId, { payoutStatus: status.status });
       setUserTransactions(TransactionStorage.getByUser(wallet!.publicKey));
 
-      if (["validated", "settled", "refunded", "expired"].includes(status.status)) return;
+      if (
+        ["validated", "settled", "refunded", "expired"].includes(status.status)
+      )
+        return;
 
       await new Promise((resolve) => setTimeout(resolve, 10000));
       attempts++;
@@ -347,18 +504,22 @@ export function StellarampDashboard() {
     return "Convert Stellar USDC to your bank account in minutes.";
   };
 
-  const handlePricingUpdate = useCallback((data: {
-    amount: string;
-    quote: {
-      destinationAmount: string;
-      rate: number;
+  const handlePricingUpdate = useCallback(
+    (data: {
+      amount: string;
+      quote: {
+        destinationAmount: string;
+        rate: number;
+        currency: string;
+        estimatedTimeMs: number;
+      } | null;
+      isLoadingQuote: boolean;
       currency: string;
-    } | null;
-    isLoadingQuote: boolean;
-    currency: string;
-  }) => {
-    setPricingState(data);
-  }, []);
+    }) => {
+      setPricingState(data);
+    },
+    [],
+  );
 
   return (
     <main className="min-h-screen p-4">
@@ -376,8 +537,8 @@ export function StellarampDashboard() {
           />
 
           <div className="grid grid-cols-[1fr_370px] gap-3 max-[1100px]:grid-cols-1">
-            <div className="flex flex-col gap-3">
-              <FormCard 
+            <div className="max-[1100px]:order-1">
+              <FormCard
                 isConnected={isConnected}
                 isConnecting={isConnecting}
                 isExecutingOfframp={isExecutingOfframp}
@@ -385,20 +546,24 @@ export function StellarampDashboard() {
                 onInitiateOfframp={handleExecuteTrade}
                 onPricingUpdate={handlePricingUpdate}
               />
+            </div>
+            <div className="row-span-2 col-start-2 max-[1100px]:order-2 max-[1100px]:row-auto max-[1100px]:col-auto">
+              <RightPanel
+                isConnected={isConnected}
+                isConnecting={isConnecting}
+                amount={pricingState.amount}
+                quote={pricingState.quote}
+                isLoadingQuote={pricingState.isLoadingQuote}
+                currency={pricingState.currency}
+                onConnect={handleConnect}
+              />
+            </div>
+            <div className="col-start-1 max-[1100px]:order-3 max-[1100px]:col-auto">
               <RecentOfframpsTable rows={RECENT_OFFRAMPS} />
             </div>
-            <RightPanel 
-              isConnected={isConnected}
-              isConnecting={isConnecting}
-              amount={pricingState.amount}
-              quote={pricingState.quote}
-              isLoadingQuote={pricingState.isLoadingQuote}
-              currency={pricingState.currency}
-              onConnect={handleConnect}
-            />
           </div>
 
-          <ProgressSteps 
+          <ProgressSteps
             isConnected={isConnected}
             isConnecting={isConnecting}
           />

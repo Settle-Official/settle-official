@@ -82,6 +82,8 @@ export async function getAllbridgeQuote(
   fee: string;
   estimatedTime: number;
 }> {
+  const { Messenger } = await import("@allbridge/bridge-core-sdk");
+
   const amountToBeReceived = await sdk.getAmountToBeReceived(
     amount,
     sourceToken,
@@ -95,7 +97,7 @@ export async function getAllbridgeQuote(
   const estimatedTime = sdk.getAverageTransferTime(
     sourceToken,
     destinationToken,
-    "ALLBRIDGE"
+    Messenger.ALLBRIDGE
   );
 
   return {
