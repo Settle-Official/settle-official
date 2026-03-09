@@ -158,24 +158,47 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Reject ERROR, DUPLICATE (already submitted but maybe failed), and
-    // TRY_AGAIN_LATER statuses outright.
-    if (
-      sendStatus === "ERROR" ||
-      sendStatus === "DUPLICATE" ||
-      sendStatus === "TRY_AGAIN_LATER"
-    ) {
+    // Reject ERROR and TRY_AGAIN_LATER statuses outright.
+    if (sendStatus === "ERROR" || sendStatus === "TRY_AGAIN_LATER") {
+      // Try to decode the error for a human-readable message
+      let decodedError = "";
+      if (sendResult?.errorResultXdr) {
+        try {
+          const txResult = StellarSdk.xdr.TransactionResult.fromXDR(
+            sendResult.errorResultXdr,
+            "base64",
+          );
+          decodedError = txResult.result().switch().name;
+        } catch {
+          // ignore decode failures
+        }
+      }
       console.error(
         "[submit-soroban] sendTransaction rejected with status:",
         sendStatus,
+        decodedError ? `(${decodedError})` : "",
       );
       return NextResponse.json(
         {
-          error: `Soroban sendTransaction ${sendStatus}`,
+          error: `Soroban sendTransaction ${sendStatus}${decodedError ? `: ${decodedError}` : ""}`,
           details: sendResult,
         },
         { status: 400 },
       );
+    }
+
+    // DUPLICATE means the RPC already has this tx hash in its pool.
+    // It may be processing or already confirmed — return the hash and let
+    // the client poll tx-status to find the real outcome.
+    if (sendStatus === "DUPLICATE") {
+      console.log(
+        "[submit-soroban] Transaction DUPLICATE — returning hash for client-side polling:",
+        hash,
+      );
+      return NextResponse.json({
+        hash,
+        status: "PENDING",
+      });
     }
 
     if (!hash) {

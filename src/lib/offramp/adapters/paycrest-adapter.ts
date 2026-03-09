@@ -30,19 +30,41 @@ export class PaycrestAdapter implements PayoutProviderAdapter {
 
   private async fetch<T>(
     endpoint: string,
-    options: RequestInit = {}
+    options: RequestInit = {},
   ): Promise<T> {
     const url = `${PAYCREST_API_BASE}${endpoint}`;
-    console.log(`Paycrest API request: ${options.method || 'GET'} ${url}`);
-    
-    const response = await fetch(url, {
-      ...options,
-      headers: {
-        "Content-Type": "application/json",
-        "API-Key": this.apiKey,
-        ...options.headers,
-      },
-    });
+    console.log(`Paycrest API request: ${options.method || "GET"} ${url}`);
+
+    // Abort after 15 seconds to avoid hanging on network issues
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 15_000);
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        ...options,
+        signal: abort.signal,
+        headers: {
+          "Content-Type": "application/json",
+          "API-Key": this.apiKey,
+          ...options.headers,
+        },
+      });
+    } catch (fetchErr: any) {
+      clearTimeout(timer);
+      if (fetchErr?.name === "AbortError") {
+        throw new PaycrestHttpError(
+          `Paycrest API request timed out (15s): ${endpoint}`,
+          504,
+        );
+      }
+      throw new PaycrestHttpError(
+        `Paycrest API network error: ${fetchErr.message}`,
+        502,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
@@ -85,7 +107,7 @@ export class PaycrestAdapter implements PayoutProviderAdapter {
 
   async verifyAccount(
     institution: string,
-    accountIdentifier: string
+    accountIdentifier: string,
   ): Promise<string> {
     const result = await this.fetch<{ accountName?: string; data?: string }>(
       "/verify-account",
@@ -95,7 +117,7 @@ export class PaycrestAdapter implements PayoutProviderAdapter {
           institution,
           accountIdentifier,
         }),
-      }
+      },
     );
     return result.accountName || result.data || "";
   }
@@ -107,7 +129,7 @@ export class PaycrestAdapter implements PayoutProviderAdapter {
     options?: {
       network?: string;
       providerId?: string;
-    }
+    },
   ): Promise<number> {
     const query = new URLSearchParams();
     if (options?.network) {
@@ -118,7 +140,7 @@ export class PaycrestAdapter implements PayoutProviderAdapter {
     }
 
     const endpoint = `/rates/${encodeURIComponent(token)}/${encodeURIComponent(
-      amount
+      amount,
     )}/${encodeURIComponent(currency)}${query.toString() ? `?${query.toString()}` : ""}`;
 
     // Paycrest returns "data" as a numeric string in many cases
@@ -133,9 +155,7 @@ export class PaycrestAdapter implements PayoutProviderAdapter {
     return parsedRate;
   }
 
-  async createOrder(
-    request: PayoutOrderRequest
-  ): Promise<PayoutOrderResponse> {
+  async createOrder(request: PayoutOrderRequest): Promise<PayoutOrderResponse> {
     return this.fetch("/sender/orders", {
       method: "POST",
       body: JSON.stringify(request),

@@ -206,16 +206,38 @@ export async function buildSwapAndBridgeTx(params: {
     }
   }
 
-  // 8. Assemble the transaction with the (possibly extended) auth entries
-  const preparedTx = StellarSdk.rpc.assembleTransaction(tx, simSuccess).build();
+  // 8. Assemble the transaction with the (possibly extended) auth entries.
+  //    We pass a higher fee *before* assembling so the final tx already has
+  //    a healthy inclusion margin and we do NOT need to clone afterwards
+  //    (cloneFrom strips SorobanTransactionData, breaking the tx).
+  const originalFee = parseInt(tx.fee, 10); // fee from initial TransactionBuilder (BASE_FEE)
+  const simMinFee = parseInt((simSuccess as any).minResourceFee ?? "0", 10);
+  // Target fee = (baseFee + minResourceFee) × 1.5   (~0.01 XLM extra)
+  const targetFee = Math.ceil((originalFee + simMinFee) * 1.5);
+
+  // `assembleTransaction` adds minResourceFee on top of whatever fee the tx
+  // already carries.  To hit our target we set the pre-assembly fee so that
+  // after addition we land on `targetFee`.
+  const preAssemblyFee = Math.max(targetFee - simMinFee, originalFee);
+  // Mutate the inner tx fee before assembly
+  (tx as any)._fee = preAssemblyFee.toString();
+
+  const finalTx = StellarSdk.rpc.assembleTransaction(tx, simSuccess).build();
 
   console.log(
     "[soroban-tx-builder] Transaction prepared successfully, fee:",
-    preparedTx.fee,
+    finalTx.fee,
+    "(baseFee:",
+    originalFee,
+    "simMinFee:",
+    simMinFee,
+    "target:",
+    targetFee,
+    ")",
   );
 
-  // 8. Return the base64 XDR envelope (unsigned)
-  const xdr = preparedTx.toXDR();
+  // 9. Return the base64 XDR envelope (unsigned)
+  const xdr = finalTx.toXDR();
   console.log("[soroban-tx-builder] XDR length:", xdr.length);
   return xdr;
 }

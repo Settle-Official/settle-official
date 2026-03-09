@@ -12,6 +12,8 @@ export interface FormCardProps {
   readonly isConnected: boolean;
   readonly isConnecting: boolean;
   readonly isExecutingOfframp?: boolean;
+  /** Increment to reset the form after a successful transaction */
+  readonly resetKey?: number;
   readonly onConnect: () => void;
   readonly onInitiateOfframp?: (tradeData: {
     amount: string;
@@ -99,6 +101,7 @@ export function FormCard({
   isConnected,
   isConnecting,
   isExecutingOfframp = false,
+  resetKey = 0,
   onConnect,
   onInitiateOfframp,
   onPricingUpdate,
@@ -130,6 +133,16 @@ export function FormCard({
     stablecoin: { int: string; float: string };
   } | null>(null);
   const [isLoadingFees, setIsLoadingFees] = useState(false);
+
+  // Reset form fields when resetKey changes (after successful transaction)
+  useEffect(() => {
+    if (resetKey === 0) return; // skip initial mount
+    setAmount("");
+    setAccountNumber("");
+    setBank("");
+    setAccountName("");
+    setQuote(null);
+  }, [resetKey]);
 
   // Fetch gas fee options on mount
   useEffect(() => {
