@@ -4,6 +4,9 @@ const SOROBAN_RPC_URL =
   process.env.STELLAR_SOROBAN_RPC_URL ||
   "https://soroban-rpc.mainnet.stellar.gateway.fm";
 
+const HORIZON_URL =
+  process.env.STELLAR_HORIZON_URL || "https://horizon.stellar.org";
+
 let jsonRpcId = 1;
 
 async function sorobanRpc(method: string, params: Record<string, unknown>) {
@@ -30,8 +33,30 @@ async function sorobanRpc(method: string, params: Record<string, unknown>) {
 }
 
 /**
+ * Check Horizon for a transaction by hash.
+ * Returns "SUCCESS", "FAILED", or "NOT_FOUND".
+ */
+async function checkHorizon(hash: string): Promise<string> {
+  try {
+    const res = await fetch(`${HORIZON_URL}/transactions/${hash}`, {
+      headers: { Accept: "application/json" },
+    });
+    if (res.status === 404) return "NOT_FOUND";
+    if (!res.ok) return "NOT_FOUND";
+    const data = await res.json();
+    if (data?.successful === true) return "SUCCESS";
+    if (data?.successful === false) return "FAILED";
+    // If the tx exists on Horizon at all, it was included in a ledger
+    return data?.hash ? "SUCCESS" : "NOT_FOUND";
+  } catch {
+    return "NOT_FOUND";
+  }
+}
+
+/**
  * Lightweight endpoint to check Stellar transaction confirmation status.
- * Returns: { status: "SUCCESS" | "FAILED" | "NOT_FOUND", hash }
+ * Checks both Soroban RPC and Horizon for redundancy.
+ * Returns: { status: "SUCCESS" | "FAILED" | "NOT_FOUND", hash, source }
  */
 export async function GET(
   _request: NextRequest,
@@ -47,13 +72,49 @@ export async function GET(
   }
 
   try {
+    // Try Soroban RPC first (faster for Soroban txs)
     const txResult = await sorobanRpc("getTransaction", { hash });
-    return NextResponse.json({
-      hash,
-      status: txResult?.status || "NOT_FOUND",
-    });
+    const rpcStatus = txResult?.status || "NOT_FOUND";
+
+    if (rpcStatus === "SUCCESS" || rpcStatus === "FAILED") {
+      return NextResponse.json({
+        hash,
+        status: rpcStatus,
+        source: "soroban-rpc",
+      });
+    }
+
+    // If Soroban RPC says NOT_FOUND, try Horizon as fallback
+    // (Horizon indexes all transactions, sometimes sooner for classic-wrapped Soroban ops)
+    const horizonStatus = await checkHorizon(hash);
+    if (horizonStatus !== "NOT_FOUND") {
+      console.log(
+        `[tx-status] Soroban RPC returned NOT_FOUND but Horizon returned ${horizonStatus} for ${hash}`,
+      );
+      return NextResponse.json({
+        hash,
+        status: horizonStatus,
+        source: "horizon",
+      });
+    }
+
+    return NextResponse.json({ hash, status: "NOT_FOUND", source: "both" });
   } catch (error: any) {
-    console.error("[tx-status] Error checking tx:", error.message);
+    // Even if Soroban RPC errored, try Horizon
+    console.error(
+      "[tx-status] Soroban RPC error:",
+      error.message,
+      "— trying Horizon...",
+    );
+    const horizonStatus = await checkHorizon(hash);
+    if (horizonStatus !== "NOT_FOUND") {
+      return NextResponse.json({
+        hash,
+        status: horizonStatus,
+        source: "horizon-fallback",
+      });
+    }
+
     return NextResponse.json(
       { error: error.message || "Failed to check transaction status" },
       { status: 500 },

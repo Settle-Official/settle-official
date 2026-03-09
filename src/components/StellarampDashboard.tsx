@@ -20,6 +20,30 @@ import {
   initializeAllbridgeSdk,
 } from "@/lib/offramp/adapters/allbridge-adapter";
 
+/** Run a promise with a timeout. Rejects with a clear message on expiry. */
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${ms / 1000}s`)),
+      ms,
+    );
+    promise.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
 function safeJson(value: unknown): string {
   try {
     return JSON.stringify(
@@ -77,6 +101,7 @@ export function StellarampDashboard() {
 
   const [currentTxId, setCurrentTxId] = useState<string | null>(null);
   const [isExecutingOfframp, setIsExecutingOfframp] = useState(false);
+  const [formResetKey, setFormResetKey] = useState(0);
   const [offrampStep, setOfframpStep] = useState<OfframpStep>("idle");
   const [offrampError, setOfframpError] = useState<string | null>(null);
   const [showProgressModal, setShowProgressModal] = useState(false);
@@ -223,6 +248,31 @@ export function StellarampDashboard() {
       throw new Error("Quote unavailable. Please enter an amount first.");
     }
 
+    // Pre-flight: check USDC balance
+    const usdcBal = parseFloat((stellarUsdcBalance ?? "0").replace(/,/g, ""));
+    const sendAmount = parseFloat(tradeData.amount);
+    if (usdcBal < sendAmount) {
+      throw new Error(
+        `Insufficient USDC balance. You have ${usdcBal.toFixed(2)} USDC but are trying to send ${sendAmount} USDC.`,
+      );
+    }
+
+    // Pre-flight: if paying gas in XLM, check XLM balance vs approximate cost + reserve
+    if (tradeData.feePaymentMethod === "native") {
+      const xlmBal = parseFloat((stellarXlmBalance ?? "0").replace(/,/g, ""));
+      // Stellar minimum reserve: base (1 XLM) + 0.5 per trustline/entry.
+      // Conservatively assume 1.5 XLM reserve + ~0.01 tx fee.
+      const MIN_XLM_RESERVE = 3; // conservative: 1 base + subentries + tx fee headroom
+      // The native gas fee is ~2.26 XLM currently. If the user has less than
+      // reserve + estimated gas, warn them before we hit the simulation error.
+      const estimatedGas = 2.5; // rough upper bound for native gas
+      if (xlmBal < MIN_XLM_RESERVE + estimatedGas) {
+        throw new Error(
+          `Insufficient XLM for native gas fee. You have ${xlmBal.toFixed(2)} XLM but need ~${(MIN_XLM_RESERVE + estimatedGas).toFixed(1)} XLM (gas + account reserve). Switch to USDC fee payment or add more XLM.`,
+        );
+      }
+    }
+
     const baseReturnAddress = process.env.NEXT_PUBLIC_BASE_RETURN_ADDRESS;
     if (!baseReturnAddress) {
       throw new Error("NEXT_PUBLIC_BASE_RETURN_ADDRESS is missing");
@@ -251,18 +301,30 @@ export function StellarampDashboard() {
     try {
       setTradeState({ bridgeStatus: "building", payoutStatus: "pending" });
 
-      const sdk = await initializeAllbridgeSdk();
-      const tokens = await getAllbridgeTokens(sdk);
+      const sdk = await withTimeout(
+        initializeAllbridgeSdk(),
+        15_000,
+        "Allbridge SDK init",
+      );
+      const tokens = await withTimeout(
+        getAllbridgeTokens(sdk),
+        15_000,
+        "Fetching token info",
+      );
       if (!tokens?.stellar?.usdc || !tokens?.base?.usdc) {
         throw new Error("USDC tokens not found on Allbridge");
       }
 
       // 1) Compute post-bridge amount for Paycrest order amount
-      const bridgeQuote = await getAllbridgeQuote(
-        sdk,
-        tokens.stellar.usdc,
-        tokens.base.usdc,
-        tradeData.amount,
+      const bridgeQuote = await withTimeout(
+        getAllbridgeQuote(
+          sdk,
+          tokens.stellar.usdc,
+          tokens.base.usdc,
+          tradeData.amount,
+        ),
+        15_000,
+        "Bridge quote",
       );
       const paycrestOrderAmount = Number.parseFloat(bridgeQuote.receiveAmount);
       if (!Number.isFinite(paycrestOrderAmount) || paycrestOrderAmount <= 0) {
@@ -275,25 +337,40 @@ export function StellarampDashboard() {
       const normalizedRate = Number(tradeData.rate.toFixed(6));
 
       // 2) Create Paycrest order first via internal API route (avoids browser CORS/key exposure)
-      const orderResponse = await fetch("/api/offramp/paycrest/order", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          amount: normalizedOrderAmount,
-          token: tradeData.token,
-          network: "base",
-          rate: normalizedRate,
-          reference: txId,
-          recipient: {
-            institution: tradeData.beneficiary.institution,
-            accountIdentifier: tradeData.beneficiary.accountIdentifier,
-            accountName: tradeData.beneficiary.accountName,
-            memo: tradeData.beneficiary.memo || "Stellaramp offramp",
-            currency: tradeData.beneficiary.currency,
-          },
-          returnAddress: baseReturnAddress,
-        }),
-      });
+      const orderAbort = new AbortController();
+      const orderTimer = setTimeout(() => orderAbort.abort(), 20_000);
+      let orderResponse: Response;
+      try {
+        orderResponse = await fetch("/api/offramp/paycrest/order", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: orderAbort.signal,
+          body: JSON.stringify({
+            amount: normalizedOrderAmount,
+            token: tradeData.token,
+            network: "base",
+            rate: normalizedRate,
+            reference: txId,
+            recipient: {
+              institution: tradeData.beneficiary.institution,
+              accountIdentifier: tradeData.beneficiary.accountIdentifier,
+              accountName: tradeData.beneficiary.accountName,
+              memo: tradeData.beneficiary.memo || "Stellaramp offramp",
+              currency: tradeData.beneficiary.currency,
+            },
+            returnAddress: baseReturnAddress,
+          }),
+        });
+      } catch (fetchErr: any) {
+        if (fetchErr?.name === "AbortError") {
+          throw new Error(
+            "Paycrest order request timed out (20s). Please try again.",
+          );
+        }
+        throw new Error(`Paycrest order network error: ${fetchErr.message}`);
+      } finally {
+        clearTimeout(orderTimer);
+      }
       if (!orderResponse.ok) {
         const payload = await orderResponse.json().catch(() => ({}));
         const details =
@@ -326,16 +403,31 @@ export function StellarampDashboard() {
       setUserTransactions(TransactionStorage.getByUser(wallet.publicKey));
 
       // 3) Build Allbridge tx to Paycrest settlement wallet (server route to avoid client RPC issues)
-      const buildTxResponse = await fetch("/api/offramp/bridge/build-tx", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          amount: tradeData.amount,
-          fromAddress: wallet.publicKey,
-          toAddress: settlementAddress,
-          feePaymentMethod: tradeData.feePaymentMethod || "stablecoin",
-        }),
-      });
+      const buildAbort = new AbortController();
+      const buildTimer = setTimeout(() => buildAbort.abort(), 30_000);
+      let buildTxResponse: Response;
+      try {
+        buildTxResponse = await fetch("/api/offramp/bridge/build-tx", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: buildAbort.signal,
+          body: JSON.stringify({
+            amount: tradeData.amount,
+            fromAddress: wallet.publicKey,
+            toAddress: settlementAddress,
+            feePaymentMethod: tradeData.feePaymentMethod || "stablecoin",
+          }),
+        });
+      } catch (fetchErr: any) {
+        if (fetchErr?.name === "AbortError") {
+          throw new Error(
+            "Build transaction timed out (30s). Please try again.",
+          );
+        }
+        throw new Error(`Build transaction network error: ${fetchErr.message}`);
+      } finally {
+        clearTimeout(buildTimer);
+      }
       if (!buildTxResponse.ok) {
         const payload = await buildTxResponse.json().catch(() => ({}));
         throw new Error(
@@ -385,14 +477,28 @@ export function StellarampDashboard() {
       if (hasSorobanOps) {
         // Submit via server route which forwards raw XDR to the Soroban RPC
         // (no SDK re-serialisation – avoids stellar-base version mismatch).
-        const submitResponse = await fetch(
-          "/api/offramp/bridge/submit-soroban",
-          {
+        const submitAbort = new AbortController();
+        const submitTimer = setTimeout(() => submitAbort.abort(), 15_000);
+        let submitResponse: Response;
+        try {
+          submitResponse = await fetch("/api/offramp/bridge/submit-soroban", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
+            signal: submitAbort.signal,
             body: JSON.stringify({ signedXdr }),
-          },
-        );
+          });
+        } catch (fetchErr: any) {
+          if (fetchErr?.name === "AbortError") {
+            throw new Error(
+              "Submit transaction timed out (15s). Please try again.",
+            );
+          }
+          throw new Error(
+            `Submit transaction network error: ${fetchErr.message}`,
+          );
+        } finally {
+          clearTimeout(submitTimer);
+        }
         const submitPayload = await submitResponse.json().catch(() => ({}));
         console.log(
           "[submit] Response:",
@@ -506,13 +612,17 @@ export function StellarampDashboard() {
         setOfframpStep((prev) => (prev === "processing" ? "settling" : prev));
       });
 
-      // Wait for payout (the critical path) and bridge (best-effort)
-      await Promise.all([bridgeResult, payoutResult]);
+      // Payout settlement is the critical path — once fiat arrives, we're done.
+      // Bridge polling is best-effort background info; don't block success on it.
+      await payoutResult;
 
-      // Mark as completed
+      // Mark as completed immediately — bridge may still be polling in background
       setOfframpStep("success");
       TransactionStorage.update(txId, { status: "completed" });
       setUserTransactions(TransactionStorage.getByUser(wallet.publicKey));
+
+      // Reset the form so the user can start a fresh offramp
+      setFormResetKey((k) => k + 1);
     } catch (error: any) {
       console.error("Trade execution error:", error);
 
@@ -686,6 +796,7 @@ export function StellarampDashboard() {
                 isConnected={isConnected}
                 isConnecting={isConnecting}
                 isExecutingOfframp={isExecutingOfframp}
+                resetKey={formResetKey}
                 onConnect={handleConnect}
                 onInitiateOfframp={handleExecuteTrade}
                 onPricingUpdate={handlePricingUpdate}
@@ -722,6 +833,8 @@ export function StellarampDashboard() {
           setShowProgressModal(false);
           setOfframpStep("idle");
           setOfframpError(null);
+          setTradeState({});
+          setIsExecutingOfframp(false);
         }}
       />
     </main>

@@ -116,9 +116,30 @@ export async function POST(request: NextRequest) {
       stack: error.stack,
       name: error.name,
     });
+
+    // Parse common simulation errors into user-friendly messages
+    let userMessage = error.message || "Failed to build transaction";
+    const msg = error.message || "";
+
+    if (msg.includes("resulting balance is not within the allowed range")) {
+      // The contract tried to transfer XLM (native gas) but the remaining
+      // balance would drop below the Stellar minimum account reserve.
+      userMessage =
+        "Insufficient XLM balance for the native gas fee. " +
+        "Your remaining XLM would fall below Stellar's minimum account reserve. " +
+        "Switch to USDC fee payment or add more XLM to your wallet.";
+    } else if (
+      msg.includes("contract call failed") &&
+      msg.includes("transfer")
+    ) {
+      userMessage =
+        "A token transfer in the bridge contract failed during simulation. " +
+        "This usually means insufficient balance for the amount + fees.";
+    }
+
     return NextResponse.json(
       {
-        error: error.message || "Failed to build transaction",
+        error: userMessage,
         details:
           process.env.NODE_ENV === "development" ? error.stack : undefined,
       },
