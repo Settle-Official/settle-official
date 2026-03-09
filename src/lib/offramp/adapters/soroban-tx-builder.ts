@@ -283,3 +283,76 @@ export async function getAllbridgeGasFee(
   console.warn("[soroban-tx-builder] Could not determine gas fee, using 0/0");
   return { gasAmount: "0", feeTokenAmount: "0" };
 }
+
+/* ------------------------------------------------------------------ */
+/*  Fee options for UI display                                         */
+/* ------------------------------------------------------------------ */
+
+export interface BridgeFeeOptions {
+  native: { int: string; float: string };
+  stablecoin: { int: string; float: string };
+}
+
+/**
+ * Return both fee options (native XLM and stablecoin USDC) so the UI can
+ * let the user choose which token to pay the bridge gas fee with.
+ */
+export async function getAllbridgeGasFeeOptions(
+  sdk: any,
+  sourceToken: any,
+  destinationToken: any,
+): Promise<BridgeFeeOptions> {
+  const { Messenger, FeePaymentMethod, AmountFormat } =
+    await import("@allbridge/bridge-core-sdk");
+
+  const gasFeeOptions = await sdk.getGasFeeOptions(
+    sourceToken,
+    destinationToken,
+    Messenger.ALLBRIDGE,
+  );
+
+  console.log(
+    "[soroban-tx-builder] gasFeeOptions (full):",
+    JSON.stringify(gasFeeOptions, null, 2),
+  );
+
+  return {
+    native: {
+      int: String(
+        gasFeeOptions?.[FeePaymentMethod.WITH_NATIVE_CURRENCY]?.[
+          AmountFormat.INT
+        ] || "0",
+      ),
+      float: String(
+        gasFeeOptions?.[FeePaymentMethod.WITH_NATIVE_CURRENCY]?.[
+          AmountFormat.FLOAT
+        ] || "0",
+      ),
+    },
+    stablecoin: {
+      int: String(
+        gasFeeOptions?.[FeePaymentMethod.WITH_STABLECOIN]?.[AmountFormat.INT] ||
+          "0",
+      ),
+      float: String(
+        gasFeeOptions?.[FeePaymentMethod.WITH_STABLECOIN]?.[
+          AmountFormat.FLOAT
+        ] || "0",
+      ),
+    },
+  };
+}
+
+/**
+ * Given fee options and a user-selected method, return the BridgeFeeInfo
+ * to pass into buildSwapAndBridgeTx.
+ */
+export function getBridgeFeeForMethod(
+  feeOptions: BridgeFeeOptions,
+  method: "native" | "stablecoin",
+): BridgeFeeInfo {
+  if (method === "stablecoin") {
+    return { gasAmount: "0", feeTokenAmount: feeOptions.stablecoin.int };
+  }
+  return { gasAmount: feeOptions.native.int, feeTokenAmount: "0" };
+}

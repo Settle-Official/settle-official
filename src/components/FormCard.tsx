@@ -17,6 +17,7 @@ export interface FormCardProps {
     amount: string;
     rate: number;
     token: string;
+    feePaymentMethod: "native" | "stablecoin";
     beneficiary: {
       institution: string;
       accountIdentifier: string;
@@ -103,7 +104,9 @@ export function FormCard({
   onPricingUpdate,
 }: Readonly<FormCardProps>) {
   const getCurrencyPrefix = (code?: string) =>
-    (code || "NGN").toUpperCase() === "NGN" ? "₦" : (code || "NGN").toUpperCase();
+    (code || "NGN").toUpperCase() === "NGN"
+      ? "₦"
+      : (code || "NGN").toUpperCase();
 
   const [amount, setAmount] = useState("");
   const [accountNumber, setAccountNumber] = useState("");
@@ -117,6 +120,35 @@ export function FormCard({
   const [isVerifyingAccount, setIsVerifyingAccount] = useState(false);
   const [quote, setQuote] = useState<Quote | null>(null);
   const [isLoadingQuote, setIsLoadingQuote] = useState(false);
+
+  // Gas fee selection state
+  const [feePaymentMethod, setFeePaymentMethod] = useState<
+    "native" | "stablecoin"
+  >("stablecoin");
+  const [gasFeeOptions, setGasFeeOptions] = useState<{
+    native: { int: string; float: string };
+    stablecoin: { int: string; float: string };
+  } | null>(null);
+  const [isLoadingFees, setIsLoadingFees] = useState(false);
+
+  // Fetch gas fee options on mount
+  useEffect(() => {
+    const fetchGasFees = async () => {
+      setIsLoadingFees(true);
+      try {
+        const res = await fetch("/api/offramp/bridge/gas-fee-options");
+        if (res.ok) {
+          const data = await res.json();
+          setGasFeeOptions(data.feeOptions);
+        }
+      } catch (err) {
+        console.error("Failed to fetch gas fee options:", err);
+      } finally {
+        setIsLoadingFees(false);
+      }
+    };
+    fetchGasFees();
+  }, []);
 
   // Fetch supported currencies on mount
   useEffect(() => {
@@ -158,7 +190,7 @@ export function FormCard({
       try {
         const response = await fetch(
           `${PAYCREST_API_BASE}/institutions/${encodeURIComponent(currency)}`,
-          { method: "GET" }
+          { method: "GET" },
         );
         if (!response.ok) {
           throw new Error(`Institutions request failed: ${response.status}`);
@@ -184,23 +216,22 @@ export function FormCard({
         setIsVerifyingAccount(true);
         try {
           const response = await fetch(`${PAYCREST_API_BASE}/verify-account`, {
-            method: 'POST',
+            method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ 
-              institution: bank, 
-              accountIdentifier: accountNumber 
-            })
+            body: JSON.stringify({
+              institution: bank,
+              accountIdentifier: accountNumber,
+            }),
           });
           if (!response.ok) {
             throw new Error(`Verify account failed: ${response.status}`);
           }
           const data = await response.json();
           const resolvedAccountName =
-            data?.data?.accountName ||
-            data?.data ||
-            data?.accountName ||
-            "";
-          setAccountName(typeof resolvedAccountName === "string" ? resolvedAccountName : "");
+            data?.data?.accountName || data?.data || data?.accountName || "";
+          setAccountName(
+            typeof resolvedAccountName === "string" ? resolvedAccountName : "",
+          );
         } catch (error) {
           console.error("Failed to verify account:", error);
           setAccountName("");
@@ -215,7 +246,7 @@ export function FormCard({
     verifyAccount();
   }, [accountNumber, bank]);
 
-  // Get quote when amount changes
+  // Get quote when amount or fee method changes
   useEffect(() => {
     const getQuote = async () => {
       if (amount && parseFloat(amount) >= 0.7) {
@@ -226,25 +257,40 @@ export function FormCard({
             throw new Error("USDC tokens not found on Allbridge");
           }
 
+          // When paying with stablecoin, the fee is deducted from the input
+          // amount before bridging. Re-quote with the post-fee amount for accuracy.
+          let quoteAmount = amount;
+          if (feePaymentMethod === "stablecoin" && gasFeeOptions) {
+            const stableFee = parseFloat(gasFeeOptions.stablecoin.float);
+            const afterFee = parseFloat(amount) - stableFee;
+            if (afterFee <= 0) {
+              setQuote(null);
+              setIsLoadingQuote(false);
+              return;
+            }
+            quoteAmount = afterFee.toFixed(7);
+          }
+
           const bridgeQuote = await getAllbridgeQuote(
             sdk,
             tokens.stellar.usdc,
             tokens.base.usdc,
-            amount
+            quoteAmount,
           );
 
           const rateResponse = await fetch(
             `${PAYCREST_API_BASE}/rates/USDC/${encodeURIComponent(
-              bridgeQuote.receiveAmount
+              bridgeQuote.receiveAmount,
             )}/${encodeURIComponent(currency)}?network=base`,
-            { method: "GET" }
+            { method: "GET" },
           );
           if (!rateResponse.ok) {
             throw new Error(`Rates request failed: ${rateResponse.status}`);
           }
           const ratePayload = await rateResponse.json();
           const rateRaw =
-            typeof ratePayload?.data === "string" || typeof ratePayload?.data === "number"
+            typeof ratePayload?.data === "string" ||
+            typeof ratePayload?.data === "number"
               ? ratePayload.data
               : ratePayload;
           const rate = Number.parseFloat(String(rateRaw));
@@ -281,7 +327,7 @@ export function FormCard({
 
     const debounce = setTimeout(getQuote, 500);
     return () => clearTimeout(debounce);
-  }, [amount, currency]);
+  }, [amount, currency, feePaymentMethod, gasFeeOptions]);
 
   useEffect(() => {
     onPricingUpdate?.({ amount, quote, isLoadingQuote, currency });
@@ -316,6 +362,7 @@ export function FormCard({
       amount,
       rate: quote.rate,
       token: "USDC",
+      feePaymentMethod,
       beneficiary: {
         institution: bank,
         accountIdentifier: accountNumber,
@@ -330,20 +377,24 @@ export function FormCard({
     <section className="flex flex-col gap-[1.1rem] border border-[var(--line)] bg-[#0a0a0a] p-[1.2rem]">
       <div>
         <h2 className="m-0 font-space-grotesk font-bold text-[1.50rem]">
-          {isConnected ? "READY TO OFFRAMP" : isConnecting ? "CONNECTING WALLET" : "CONNECT WALLET"}
+          {isConnected
+            ? "READY TO OFFRAMP"
+            : isConnecting
+              ? "CONNECTING WALLET"
+              : "CONNECT WALLET"}
         </h2>
         <p className="mt-[0.3rem] mb-0 text-[0.75rem] text-[var(--muted)]">
-          {isConnected 
+          {isConnected
             ? "Connected wallet detected. Confirm amount and settlement bank details."
             : isConnecting
-            ? "Waiting for wallet signature before opening the off-ramp form."
-            : "Securely connect a Stellar-compatible wallet before entering payout details."}
+              ? "Waiting for wallet signature before opening the off-ramp form."
+              : "Securely connect a Stellar-compatible wallet before entering payout details."}
         </p>
       </div>
 
       <div className="flex flex-col gap-[0.6rem]">
-        <InputField 
-          label="AMOUNT IN USDC" 
+        <InputField
+          label="AMOUNT IN USDC"
           value={amount}
           onChange={setAmount}
           type="number"
@@ -358,6 +409,103 @@ export function FormCard({
                 : "Min 0.7 USDC"
           }
         />
+        {/* Gas Fee Token Selector */}
+        <div className="flex flex-col gap-[0.4rem]">
+          <label className="text-[0.75rem] tracking-[0.08em] text-[var(--muted)]">
+            PAY GAS FEE WITH
+          </label>
+          <div className="grid grid-cols-2 gap-[0.5rem]">
+            <button
+              type="button"
+              onClick={() => setFeePaymentMethod("stablecoin")}
+              disabled={isExecutingOfframp}
+              className={cn(
+                "flex flex-col items-start gap-[0.15rem] rounded-none border-2 px-[0.8rem] py-[0.55rem] text-left transition-colors",
+                feePaymentMethod === "stablecoin"
+                  ? "border-[var(--accent)] bg-[var(--accent)]/8"
+                  : "border-[#444] hover:border-[#666]",
+                isExecutingOfframp && "cursor-not-allowed opacity-50",
+              )}
+            >
+              <span
+                className={cn(
+                  "text-[1.1rem] font-semibold",
+                  feePaymentMethod === "stablecoin"
+                    ? "text-[var(--accent)]"
+                    : "text-[var(--foreground)]",
+                )}
+              >
+                USDC
+              </span>
+              <span className="text-[0.85rem] text-[var(--muted)]">
+                {isLoadingFees
+                  ? "Loading..."
+                  : gasFeeOptions
+                    ? `~${parseFloat(gasFeeOptions.stablecoin.float).toFixed(4)} USDC`
+                    : "—"}
+              </span>
+              <span className="text-[0.65rem] text-[var(--muted)] opacity-70">
+                Deducted from amount
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setFeePaymentMethod("native")}
+              disabled={isExecutingOfframp}
+              className={cn(
+                "flex flex-col items-start gap-[0.15rem] rounded-none border-2 px-[0.8rem] py-[0.55rem] text-left transition-colors",
+                feePaymentMethod === "native"
+                  ? "border-[var(--accent)] bg-[var(--accent)]/8"
+                  : "border-[#444] hover:border-[#666]",
+                isExecutingOfframp && "cursor-not-allowed opacity-50",
+              )}
+            >
+              <span
+                className={cn(
+                  "text-[1.1rem] font-semibold",
+                  feePaymentMethod === "native"
+                    ? "text-[var(--accent)]"
+                    : "text-[var(--foreground)]",
+                )}
+              >
+                XLM
+              </span>
+              <span className="text-[0.85rem] text-[var(--muted)]">
+                {isLoadingFees
+                  ? "Loading..."
+                  : gasFeeOptions
+                    ? `~${parseFloat(gasFeeOptions.native.float).toFixed(4)} XLM`
+                    : "—"}
+              </span>
+              <span className="text-[0.65rem] text-[var(--muted)] opacity-70">
+                Paid separately in XLM
+              </span>
+            </button>
+          </div>
+          {feePaymentMethod === "stablecoin" &&
+            gasFeeOptions &&
+            parseFloat(amount) > 0 && (
+              <p className="m-0 text-[0.8rem] text-yellow-500/80">
+                ⚠ {parseFloat(gasFeeOptions.stablecoin.float).toFixed(4)} USDC
+                bridge fee deducted — ~
+                {Math.max(
+                  0,
+                  parseFloat(amount) -
+                    parseFloat(gasFeeOptions.stablecoin.float),
+                ).toFixed(4)}{" "}
+                USDC bridged
+              </p>
+            )}
+          {feePaymentMethod === "native" &&
+            gasFeeOptions &&
+            parseFloat(amount) > 0 && (
+              <p className="m-0 text-[0.8rem] text-blue-400/80">
+                ! Full {amount} USDC bridged —{" "}
+                {parseFloat(gasFeeOptions.native.float).toFixed(4)} XLM charged
+                separately
+              </p>
+            )}
+        </div>
         <div className="grid grid-cols-2 gap-[0.6rem] max-[720px]:grid-cols-1">
           <SelectField
             label="OFFRAMP CURRENCY"
@@ -367,11 +515,14 @@ export function FormCard({
               setBank("");
               setAccountName("");
             }}
-            options={currencies.map((c) => ({ code: c.code, name: `${c.name} (${c.symbol})` }))}
+            options={currencies.map((c) => ({
+              code: c.code,
+              name: `${c.name} (${c.symbol})`,
+            }))}
             isLoading={isLoadingCurrencies}
           />
-          <InputField 
-            label="ACCOUNT NUMBER" 
+          <InputField
+            label="ACCOUNT NUMBER"
             value={accountNumber}
             onChange={setAccountNumber}
             placeholder="0000000000"
@@ -392,13 +543,28 @@ export function FormCard({
         />
         {quote && (
           <div className="mt-2 p-3 bg-[#1a1a1a] border border-[var(--line)] rounded">
-            <div className="text-[0.75rem] text-[var(--muted)] mb-1">ESTIMATED PAYOUT</div>
+            <div className="text-[0.75rem] text-[var(--muted)] mb-1">
+              ESTIMATED PAYOUT
+            </div>
             <div className="text-[1.5rem] font-bold text-[var(--accent)]">
-              {getCurrencyPrefix(quote.currency)}{quote.destinationAmount}
+              {getCurrencyPrefix(quote.currency)}
+              {quote.destinationAmount}
             </div>
             <div className="text-[0.7rem] text-[var(--muted)] mt-1">
               Est. time: {formatEstimatedTime(quote.estimatedTimeMs)}
+              {" · "}Includes 1% platform fee
             </div>
+            {feePaymentMethod === "stablecoin" && gasFeeOptions && (
+              <div className="text-[0.65rem] text-[var(--muted)] mt-0.5">
+                Bridged: ~
+                {Math.max(
+                  0,
+                  parseFloat(amount) -
+                    parseFloat(gasFeeOptions.stablecoin.float),
+                ).toFixed(4)}{" "}
+                USDC → Base
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -406,11 +572,18 @@ export function FormCard({
       <button
         type="button"
         onClick={handlePrimaryAction}
-        disabled={!isConnected ? isConnecting || isExecutingOfframp : !canInitiateOfframp}
+        disabled={
+          !isConnected
+            ? isConnecting || isExecutingOfframp
+            : !canInitiateOfframp
+        }
         className={cn(
           "h-12 font-bold uppercase tracking-[0.08em] transition-colors",
-          !isConnected && !isConnecting && "bg-[var(--accent)] text-[#0a0a0a] hover:brightness-110",
-          (isConnecting || isExecutingOfframp) && "bg-[#2f2f2f] text-[var(--muted)] cursor-not-allowed",
+          !isConnected &&
+            !isConnecting &&
+            "bg-[var(--accent)] text-[#0a0a0a] hover:brightness-110",
+          (isConnecting || isExecutingOfframp) &&
+            "bg-[#2f2f2f] text-[var(--muted)] cursor-not-allowed",
           isConnected && "bg-[#efefef] text-[#0a0a0a] hover:brightness-95",
         )}
       >
@@ -463,7 +636,7 @@ function InputField({
           className={cn(
             "flex-1 bg-transparent text-[0.95rem] outline-none",
             disabled && "cursor-not-allowed opacity-50",
-            "placeholder:text-[var(--muted)]"
+            "placeholder:text-[var(--muted)]",
           )}
         />
         {suffix ? (
@@ -482,7 +655,13 @@ interface SelectFieldProps {
   readonly isLoading?: boolean;
 }
 
-function SelectField({ label, value, onChange, options, isLoading }: Readonly<SelectFieldProps>) {
+function SelectField({
+  label,
+  value,
+  onChange,
+  options,
+  isLoading,
+}: Readonly<SelectFieldProps>) {
   return (
     <div className="flex flex-col gap-[0.4rem]">
       <label className="text-[0.69rem] tracking-[0.08em] text-[var(--muted)]">
@@ -496,21 +675,37 @@ function SelectField({ label, value, onChange, options, isLoading }: Readonly<Se
           className={cn(
             "h-full w-full appearance-none bg-transparent px-[0.8rem] text-[0.95rem] outline-none",
             isLoading && "cursor-not-allowed opacity-50",
-            !value && "text-[var(--muted)]"
+            !value && "text-[var(--muted)]",
           )}
         >
           <option value="" disabled>
             {isLoading ? "Loading banks..." : "Select bank"}
           </option>
           {options.map((bank) => (
-            <option key={bank.code} value={bank.code} className="bg-[#0a0a0a] text-white">
+            <option
+              key={bank.code}
+              value={bank.code}
+              className="bg-[#0a0a0a] text-white"
+            >
               {bank.name}
             </option>
           ))}
         </select>
         <div className="pointer-events-none absolute right-[0.8rem] top-1/2 -translate-y-1/2">
-          <svg width="12" height="8" viewBox="0 0 12 8" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M1 1L6 6L11 1" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+          <svg
+            width="12"
+            height="8"
+            viewBox="0 0 12 8"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M1 1L6 6L11 1"
+              stroke="var(--accent)"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
           </svg>
         </div>
       </div>
