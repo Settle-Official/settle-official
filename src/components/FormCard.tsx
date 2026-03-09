@@ -124,7 +124,7 @@ export function FormCard({
   // Gas fee selection state
   const [feePaymentMethod, setFeePaymentMethod] = useState<
     "native" | "stablecoin"
-  >("stablecoin");
+  >("native");
   const [gasFeeOptions, setGasFeeOptions] = useState<{
     native: { int: string; float: string };
     stablecoin: { int: string; float: string };

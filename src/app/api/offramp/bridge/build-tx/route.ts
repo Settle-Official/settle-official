@@ -13,6 +13,9 @@ import {
   validateAddress,
 } from "@/lib/offramp/utils/validation";
 
+// Allow up to 30s for SDK init + simulation (Vercel hobby default is 10s)
+export const maxDuration = 30;
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
