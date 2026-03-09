@@ -9,6 +9,10 @@ import { RecentOfframpsTable } from "@/components/RecentOfframpsTable";
 import { RightPanel } from "@/components/RightPanel";
 import { useStellarWallet } from "@/hooks/useStellarWallet";
 import { TransactionStorage, Transaction } from "@/lib/transaction-storage";
+import {
+  TransactionProgressModal,
+  type OfframpStep,
+} from "@/components/TransactionProgressModal";
 import * as StellarSdk from "@stellar/stellar-sdk";
 import {
   getAllbridgeQuote,
@@ -73,6 +77,9 @@ export function StellarampDashboard() {
 
   const [currentTxId, setCurrentTxId] = useState<string | null>(null);
   const [isExecutingOfframp, setIsExecutingOfframp] = useState(false);
+  const [offrampStep, setOfframpStep] = useState<OfframpStep>("idle");
+  const [offrampError, setOfframpError] = useState<string | null>(null);
+  const [showProgressModal, setShowProgressModal] = useState(false);
   const [tradeState, setTradeState] = useState<{
     stellarTxHash?: string;
     bridgeStatus?: string;
@@ -82,6 +89,9 @@ export function StellarampDashboard() {
   }>({});
   const [userTransactions, setUserTransactions] = useState<Transaction[]>([]);
   const [stellarUsdcBalance, setStellarUsdcBalance] = useState<string | null>(
+    null,
+  );
+  const [stellarXlmBalance, setStellarXlmBalance] = useState<string | null>(
     null,
   );
   const [isLoadingBalance, setIsLoadingBalance] = useState(false);
@@ -115,6 +125,7 @@ export function StellarampDashboard() {
     const loadUsdcBalance = async () => {
       if (!wallet?.publicKey) {
         setStellarUsdcBalance(null);
+        setStellarXlmBalance(null);
         return;
       }
 
@@ -133,6 +144,7 @@ export function StellarampDashboard() {
           : [];
         const preferredIssuer = process.env.NEXT_PUBLIC_STELLAR_USDC_ISSUER;
 
+        // Find USDC balance
         const usdcTrustline = balances.find((balance: any) => {
           if (
             balance?.asset_type !== "credit_alphanum4" &&
@@ -153,9 +165,23 @@ export function StellarampDashboard() {
             })
           : "0.00";
         setStellarUsdcBalance(displayValue);
+
+        // Find XLM (native) balance
+        const nativeBalance = balances.find(
+          (balance: any) => balance?.asset_type === "native",
+        );
+        const xlmParsed = Number.parseFloat(nativeBalance?.balance ?? "0");
+        const xlmDisplay = Number.isFinite(xlmParsed)
+          ? xlmParsed.toLocaleString("en-US", {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 4,
+            })
+          : "0.00";
+        setStellarXlmBalance(xlmDisplay);
       } catch (error) {
-        console.error("Failed to fetch Stellar USDC balance:", error);
+        console.error("Failed to fetch Stellar balances:", error);
         setStellarUsdcBalance("0.00");
+        setStellarXlmBalance("0.00");
       } finally {
         setIsLoadingBalance(false);
       }
@@ -205,6 +231,9 @@ export function StellarampDashboard() {
     const txId = TransactionStorage.generateId();
     setCurrentTxId(txId);
     setIsExecutingOfframp(true);
+    setOfframpStep("initiating");
+    setOfframpError(null);
+    setShowProgressModal(true);
 
     // Create initial transaction record
     const transaction: Transaction = {
@@ -321,9 +350,11 @@ export function StellarampDashboard() {
       }
 
       // 4) Sign transaction with wallet
+      setOfframpStep("awaiting-signature");
       const signedXdr = await signTransaction(xdr);
 
       // 5) Submit to Stellar network
+      setOfframpStep("submitting");
       console.log("Submitting transaction to Stellar network...");
       let stellarTxHash: string;
 
@@ -413,6 +444,7 @@ export function StellarampDashboard() {
       setUserTransactions(TransactionStorage.getByUser(wallet.publicKey));
 
       // 6) Poll bridge + payout status independently.
+      setOfframpStep("processing");
       // Bridge polling is best-effort — Allbridge status API may 404 for a while.
       // Payout polling is what actually matters (Paycrest settling to the bank).
       const bridgeResult = pollBridgeStatus(txId, stellarTxHash).catch(
@@ -426,10 +458,16 @@ export function StellarampDashboard() {
       );
       const payoutResult = pollPayoutStatus(txId, payoutOrderId);
 
+      // Switch to "settling" once bridge is likely done (after a short delay)
+      bridgeResult.then(() => {
+        setOfframpStep((prev) => (prev === "processing" ? "settling" : prev));
+      });
+
       // Wait for payout (the critical path) and bridge (best-effort)
       await Promise.all([bridgeResult, payoutResult]);
 
       // Mark as completed
+      setOfframpStep("success");
       TransactionStorage.update(txId, { status: "completed" });
       setUserTransactions(TransactionStorage.getByUser(wallet.publicKey));
     } catch (error: any) {
@@ -446,6 +484,8 @@ export function StellarampDashboard() {
       }
 
       setTradeState((prev) => ({ ...prev, error: error.message }));
+      setOfframpStep("error");
+      setOfframpError(error.message);
 
       // Mark as failed
       TransactionStorage.update(txId, {
@@ -458,6 +498,7 @@ export function StellarampDashboard() {
     } finally {
       setIsExecutingOfframp(false);
       setCurrentTxId(null);
+      // Don't close modal or reset step here — user dismisses modal manually
     }
   };
 
@@ -538,6 +579,13 @@ export function StellarampDashboard() {
       TransactionStorage.update(txId, { payoutStatus: status.status });
       setUserTransactions(TransactionStorage.getByUser(wallet!.publicKey));
 
+      // Advance modal to "settling" once Paycrest validates the deposit
+      if (status.status === "validated" || status.status === "settled") {
+        setOfframpStep((prev) =>
+          prev === "processing" || prev === "settling" ? "settling" : prev,
+        );
+      }
+
       if (
         ["validated", "settled", "refunded", "expired"].includes(status.status)
       )
@@ -582,6 +630,7 @@ export function StellarampDashboard() {
             isConnecting={isConnecting}
             walletAddress={wallet?.publicKey}
             stellarUsdcBalance={stellarUsdcBalance}
+            stellarXlmBalance={stellarXlmBalance}
             isBalanceLoading={isLoadingBalance}
             onConnect={handleConnect}
             onDisconnect={handleDisconnect}
@@ -620,6 +669,17 @@ export function StellarampDashboard() {
           />
         </div>
       </section>
+
+      <TransactionProgressModal
+        isOpen={showProgressModal}
+        currentStep={offrampStep}
+        error={offrampError}
+        onClose={() => {
+          setShowProgressModal(false);
+          setOfframpStep("idle");
+          setOfframpError(null);
+        }}
+      />
     </main>
   );
 }

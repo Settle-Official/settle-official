@@ -4,6 +4,7 @@ export interface HeaderProps {
   readonly isConnecting: boolean;
   readonly walletAddress?: string;
   readonly stellarUsdcBalance?: string | null;
+  readonly stellarXlmBalance?: string | null;
   readonly isBalanceLoading?: boolean;
   readonly onConnect: () => void;
   readonly onDisconnect: () => void;
@@ -15,6 +16,7 @@ export function Header({
   isConnecting,
   walletAddress,
   stellarUsdcBalance,
+  stellarXlmBalance,
   isBalanceLoading = false,
   onConnect,
   onDisconnect,
@@ -45,11 +47,18 @@ export function Header({
           {buttonText}
         </button>
         {isConnected ? (
-          <p className="mt-2 text-right text-[0.85rem] text-[var(--muted)]">
-            {isBalanceLoading
-              ? "USDC Balance: loading..."
-              : `USDC Balance: ${stellarUsdcBalance ?? "0.00"}`}
-          </p>
+          <div className="mt-2 flex flex-col items-end gap-[0.15rem]">
+            <p className="m-0 text-right text-[0.85rem] text-[var(--muted)]">
+              {isBalanceLoading
+                ? "USDC Balance: loading..."
+                : `USDC Balance: ${stellarUsdcBalance ?? "0.00"}`}
+            </p>
+            <p className="m-0 text-right text-[0.85rem] text-[var(--muted)]">
+              {isBalanceLoading
+                ? "XLM Balance: loading..."
+                : `XLM Balance: ${stellarXlmBalance ?? "0.00"}`}
+            </p>
+          </div>
         ) : null}
       </div>
     </header>
