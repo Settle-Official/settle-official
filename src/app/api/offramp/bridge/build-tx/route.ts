@@ -5,7 +5,8 @@ import {
 } from "@/lib/offramp/adapters/allbridge-adapter";
 import {
   buildSwapAndBridgeTx,
-  getAllbridgeGasFee,
+  getAllbridgeGasFeeOptions,
+  getBridgeFeeForMethod,
 } from "@/lib/offramp/adapters/soroban-tx-builder";
 import {
   validateAmount,
@@ -15,12 +16,13 @@ import {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { amount, fromAddress, toAddress } = body;
+    const { amount, fromAddress, toAddress, feePaymentMethod } = body;
 
     console.log("[build-tx] Request received:", {
       amount,
       fromAddress,
       toAddress,
+      feePaymentMethod: feePaymentMethod || "stablecoin (default)",
     });
 
     // Validation
@@ -64,10 +66,16 @@ export async function POST(request: NextRequest) {
       destinationChainId: baseUsdc.allbridgeChainId,
     });
 
-    // Get gas fee from Allbridge API (prefers stablecoin payment to avoid
-    // requiring the user to hold extra XLM for the bridge gas fee).
-    const feeInfo = await getAllbridgeGasFee(sdk, stellarUsdc, baseUsdc);
-    console.log("[build-tx] Fee info:", feeInfo);
+    // Get fee options and select based on user preference
+    const feeOptions = await getAllbridgeGasFeeOptions(
+      sdk,
+      stellarUsdc,
+      baseUsdc,
+    );
+    const selectedMethod: "native" | "stablecoin" =
+      feePaymentMethod === "native" ? "native" : "stablecoin";
+    const feeInfo = getBridgeFeeForMethod(feeOptions, selectedMethod);
+    console.log("[build-tx] Fee method:", selectedMethod, "Fee info:", feeInfo);
 
     // Build the Soroban transaction using the project's up-to-date stellar-sdk
     // (instead of the Allbridge SDK's bundled stellar-sdk@13.3.0 which only

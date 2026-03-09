@@ -6,18 +6,18 @@ import {
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: Promise<{ txHash: string }> }
+  { params }: { params: Promise<{ txHash: string }> },
 ) {
+  const { txHash } = await params;
+
+  if (!txHash) {
+    return NextResponse.json(
+      { error: "Transaction hash required" },
+      { status: 400 },
+    );
+  }
+
   try {
-    const { txHash } = await params;
-
-    if (!txHash) {
-      return NextResponse.json(
-        { error: "Transaction hash required" },
-        { status: 400 }
-      );
-    }
-
     // Initialize Allbridge SDK
     const sdk = await initializeAllbridgeSdk();
 
@@ -26,10 +26,24 @@ export async function GET(
 
     return NextResponse.json({ data: status });
   } catch (error: any) {
+    // Allbridge may return 404 early on before indexing the cross-chain transfer.
+    // Return a pending status instead of failing so the client can keep polling.
+    const is404 =
+      error?.response?.status === 404 ||
+      error?.status === 404 ||
+      error?.message?.includes("404");
+
+    if (is404) {
+      console.warn(`Bridge status 404 for tx ${txHash} — returning pending`);
+      return NextResponse.json({
+        data: { status: "pending", txHash },
+      });
+    }
+
     console.error("Bridge status error:", error);
     return NextResponse.json(
       { error: error.message || "Failed to get bridge status" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

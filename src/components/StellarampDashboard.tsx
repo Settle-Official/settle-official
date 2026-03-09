@@ -181,6 +181,7 @@ export function StellarampDashboard() {
     amount: string;
     rate: number;
     token: string;
+    feePaymentMethod?: "native" | "stablecoin";
     beneficiary: {
       institution: string;
       accountIdentifier: string;
@@ -238,7 +239,10 @@ export function StellarampDashboard() {
       if (!Number.isFinite(paycrestOrderAmount) || paycrestOrderAmount <= 0) {
         throw new Error("Invalid bridge receive amount for payout order");
       }
-      const normalizedOrderAmount = Number(paycrestOrderAmount.toFixed(6));
+      // Floor to 6 decimals to ensure actual bridge deposit >= order amount.
+      // Using toFixed(6) can round UP, causing a tiny overshoot that prevents
+      // Paycrest from matching the deposit to the order.
+      const normalizedOrderAmount = Math.floor(paycrestOrderAmount * 1e6) / 1e6;
       const normalizedRate = Number(tradeData.rate.toFixed(6));
 
       // 2) Create Paycrest order first via internal API route (avoids browser CORS/key exposure)
@@ -300,6 +304,7 @@ export function StellarampDashboard() {
           amount: tradeData.amount,
           fromAddress: wallet.publicKey,
           toAddress: settlementAddress,
+          feePaymentMethod: tradeData.feePaymentMethod || "stablecoin",
         }),
       });
       if (!buildTxResponse.ok) {
@@ -407,11 +412,22 @@ export function StellarampDashboard() {
       });
       setUserTransactions(TransactionStorage.getByUser(wallet.publicKey));
 
-      // 6) Poll bridge + payout status
-      await Promise.all([
-        pollBridgeStatus(txId, stellarTxHash),
-        pollPayoutStatus(txId, payoutOrderId),
-      ]);
+      // 6) Poll bridge + payout status independently.
+      // Bridge polling is best-effort — Allbridge status API may 404 for a while.
+      // Payout polling is what actually matters (Paycrest settling to the bank).
+      const bridgeResult = pollBridgeStatus(txId, stellarTxHash).catch(
+        (err) => {
+          console.warn(
+            "Bridge status polling ended without completion:",
+            err.message,
+          );
+          // Don't fail the overall flow — bridge may still complete in background
+        },
+      );
+      const payoutResult = pollPayoutStatus(txId, payoutOrderId);
+
+      // Wait for payout (the critical path) and bridge (best-effort)
+      await Promise.all([bridgeResult, payoutResult]);
 
       // Mark as completed
       TransactionStorage.update(txId, { status: "completed" });
@@ -448,27 +464,62 @@ export function StellarampDashboard() {
   const pollBridgeStatus = async (txId: string, txHash: string) => {
     const maxAttempts = 60;
     let attempts = 0;
+    let consecutiveErrors = 0;
+    const MAX_ERRORS = 10; // give up after 10 consecutive errors
 
     while (attempts < maxAttempts) {
-      const response = await fetch(`/api/offramp/bridge/status/${txHash}`);
-      if (!response.ok) {
-        throw new Error(`Bridge status polling failed: ${response.status}`);
+      try {
+        const response = await fetch(`/api/offramp/bridge/status/${txHash}`);
+        if (!response.ok) {
+          consecutiveErrors++;
+          console.warn(
+            `Bridge status poll HTTP ${response.status} (${consecutiveErrors}/${MAX_ERRORS})`,
+          );
+          if (consecutiveErrors >= MAX_ERRORS) {
+            console.warn(
+              "Bridge polling: too many consecutive errors, giving up",
+            );
+            return; // soft exit — don't throw
+          }
+          await new Promise((resolve) => setTimeout(resolve, 10000));
+          attempts++;
+          continue;
+        }
+
+        consecutiveErrors = 0; // reset on success
+        const payload = await response.json();
+        const status = payload?.data || payload;
+
+        setTradeState((prev) => ({ ...prev, bridgeStatus: status.status }));
+        TransactionStorage.update(txId, { bridgeStatus: status.status });
+        setUserTransactions(TransactionStorage.getByUser(wallet!.publicKey));
+
+        if (status.status === "completed") return;
+        if (status.status === "failed")
+          throw new Error("Bridge transfer failed");
+      } catch (error: any) {
+        if (error?.message === "Bridge transfer failed") throw error;
+        consecutiveErrors++;
+        console.warn(
+          `Bridge status poll error (${consecutiveErrors}/${MAX_ERRORS}):`,
+          error.message,
+        );
+        if (consecutiveErrors >= MAX_ERRORS) {
+          console.warn(
+            "Bridge polling: too many consecutive errors, giving up",
+          );
+          return; // soft exit
+        }
       }
-      const payload = await response.json();
-      const status = payload?.data || payload;
-
-      setTradeState((prev) => ({ ...prev, bridgeStatus: status.status }));
-      TransactionStorage.update(txId, { bridgeStatus: status.status });
-      setUserTransactions(TransactionStorage.getByUser(wallet!.publicKey));
-
-      if (status.status === "completed") return;
-      if (status.status === "failed") throw new Error("Bridge transfer failed");
 
       await new Promise((resolve) => setTimeout(resolve, 5000));
       attempts++;
     }
 
-    throw new Error("Bridge polling timeout");
+    // Timeout is NOT fatal — bridge may still complete
+    console.warn(
+      "Bridge polling timeout (5 min) — bridge may still be processing",
+    );
   };
 
   const pollPayoutStatus = async (txId: string, orderId: string) => {

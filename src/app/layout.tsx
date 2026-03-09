@@ -18,14 +18,20 @@ const spaceGrotesk = Space_Grotesk({
 });
 
 export const metadata: Metadata = {
-  title: "Stellaramp Offramp",
-  description: "Wallet-first Web3 offramp flow",
+  title: "Stellaramp - Swift & Seamless",
+  description: "Wallet-first Web3 offramp flow for Stellar Blockchain",
 };
 
-export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+export default function RootLayout({
+  children,
+}: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
-      <body className={`${ibmPlexMono.className} ${ibmPlexMono.variable} ${spaceGrotesk.variable}`}>{children}</body>
+      <body
+        className={`${ibmPlexMono.className} ${ibmPlexMono.variable} ${spaceGrotesk.variable}`}
+      >
+        {children}
+      </body>
     </html>
   );
 }
