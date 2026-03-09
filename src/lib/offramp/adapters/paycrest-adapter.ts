@@ -9,6 +9,18 @@ import type {
 
 const PAYCREST_API_BASE = "https://api.paycrest.io/v1";
 
+class PaycrestHttpError extends Error {
+  status: number;
+  details: unknown;
+
+  constructor(message: string, status: number, details?: unknown) {
+    super(message);
+    this.name = "PaycrestHttpError";
+    this.status = status;
+    this.details = details;
+  }
+}
+
 export class PaycrestAdapter implements PayoutProviderAdapter {
   private apiKey: string;
 
@@ -40,9 +52,11 @@ export class PaycrestAdapter implements PayoutProviderAdapter {
         statusText: response.statusText,
         error,
       });
-      throw new Error(
-        error.message || `Paycrest API error: ${response.status} ${response.statusText}`
-      );
+      const message =
+        error?.message ||
+        error?.error ||
+        `Paycrest API error: ${response.status} ${response.statusText}`;
+      throw new PaycrestHttpError(message, response.status, error);
     }
 
     const data = await response.json();

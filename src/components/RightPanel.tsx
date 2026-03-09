@@ -129,7 +129,7 @@ export function RightPanel({
         </div>
         <div className="flex items-center justify-between py-[0.35rem] text-[0.72rem] text-[var(--muted)]">
           <span>Platform fee</span>
-          <span className="text-white">0.5%</span>
+          <span className="text-white">-</span>
         </div>
         <div className="my-[0.45rem] h-px bg-[var(--line)]" />
         <div className="flex items-center justify-between py-[0.35rem] text-[0.72rem] font-bold text-[var(--accent)]">

@@ -13,7 +13,10 @@ export function RecentOfframpsTable({
         <h2 className="m-0 font-space-grotesk font-bold text-[1.50rem]">
           RECENT OFFRAMPS
         </h2>
-        <button type="button" className="text-[0.62rem] text-[var(--accent)]">
+        <button
+          type="button"
+          className="text-[0.62rem] tracking-[0.06em] text-[var(--accent)] max-[720px]:text-[0.5rem]"
+        >
           VIEW ALL
         </button>
       </div>
