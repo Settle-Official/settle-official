@@ -38,7 +38,6 @@ export async function POST(request: NextRequest) {
     }
 
     // Step 1: Create Paycrest order
-    console.log("Creating Paycrest order...");
     const paycrest = new PaycrestAdapter(paycrestApiKey);
 
     const orderData = {
@@ -57,10 +56,8 @@ export async function POST(request: NextRequest) {
     };
 
     const paycrestOrder = await paycrest.createOrder(orderData);
-    console.log("Paycrest order created:", paycrestOrder.id);
 
     // Step 2: Transfer tokens to Paycrest receive address (SERVER-SIDE ONLY)
-    console.log("Initiating token transfer to Paycrest...");
 
     const publicClient = createPublicClient({
       chain: base,
@@ -104,7 +101,6 @@ export async function POST(request: NextRequest) {
       args: [paycrestOrder.receiveAddress as `0x${string}`, parsedAmount],
     });
 
-    console.log("Token transfer executed:", hash);
 
     // Wait for transaction confirmation
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
@@ -121,7 +117,6 @@ export async function POST(request: NextRequest) {
       status: paycrestOrder.status,
     });
   } catch (error: any) {
-    console.error("Execute payout error:", error);
     return NextResponse.json(
       { error: error.message || "Failed to execute payout" },
       { status: 500 }

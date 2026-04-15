@@ -87,16 +87,7 @@ export async function buildSwapAndBridgeTx(params: {
     feeTokenAmount,
   } = params;
 
-  console.log("[soroban-tx-builder] Building swap_and_bridge tx:", {
-    bridgeContractId,
-    fromAddress,
-    toAddress: toAddress.slice(0, 10) + "...",
-    amount,
-    destinationChainId,
-    gasAmount,
-    feeTokenAmount,
-  });
-
+  
   // 1. Connect to Soroban RPC and load source account
   const rpcServer = new StellarSdk.rpc.Server(SOROBAN_RPC_URL);
   const sourceAccount = await rpcServer.getAccount(fromAddress);
@@ -132,12 +123,7 @@ export async function buildSwapAndBridgeTx(params: {
   const gasAmountInt = BigInt(gasAmount);
   const feeTokenAmountInt = BigInt(feeTokenAmount);
 
-  console.log(
-    "[soroban-tx-builder] Fee params: gas_amount=%s (native XLM), fee_token_amount=%s (source token)",
-    gasAmountInt.toString(),
-    feeTokenAmountInt.toString(),
-  );
-
+  
   // 4. Build the contract call using the project's SDK contract spec.
   //    funcArgsToScVals handles all type marshaling from the ABI spec –
   //    pass raw Address objects, BigInts, Buffers, and numbers directly.
@@ -168,8 +154,7 @@ export async function buildSwapAndBridgeTx(params: {
     .build();
 
   // 7. Simulate the transaction (separate from assembly so we can tweak auth)
-  console.log("[soroban-tx-builder] Simulating transaction...");
-  const simResult = await rpcServer.simulateTransaction(tx);
+    const simResult = await rpcServer.simulateTransaction(tx);
 
   if (StellarSdk.rpc.Api.isSimulationError(simResult)) {
     throw new Error(
@@ -194,14 +179,7 @@ export async function buildSwapAndBridgeTx(params: {
       const creds = authEntry.credentials();
       if (creds.switch().name === "sorobanCredentialsAddress") {
         const currentExp = creds.address().signatureExpirationLedger();
-        console.log(
-          "[soroban-tx-builder] Auth entry expiration: current=%d, extending to %d (latest=%d, bump=+%d)",
-          currentExp,
-          desiredExpiration,
-          latestLedger,
-          AUTH_EXPIRATION_LEDGER_BUMP,
-        );
-        creds.address().signatureExpirationLedger(desiredExpiration);
+                creds.address().signatureExpirationLedger(desiredExpiration);
       }
     }
   }
@@ -224,22 +202,10 @@ export async function buildSwapAndBridgeTx(params: {
 
   const finalTx = StellarSdk.rpc.assembleTransaction(tx, simSuccess).build();
 
-  console.log(
-    "[soroban-tx-builder] Transaction prepared successfully, fee:",
-    finalTx.fee,
-    "(baseFee:",
-    originalFee,
-    "simMinFee:",
-    simMinFee,
-    "target:",
-    targetFee,
-    ")",
-  );
-
+  
   // 9. Return the base64 XDR envelope (unsigned)
   const xdr = finalTx.toXDR();
-  console.log("[soroban-tx-builder] XDR length:", xdr.length);
-  return xdr;
+    return xdr;
 }
 
 /**
@@ -275,19 +241,14 @@ export async function getAllbridgeGasFee(
     Messenger.ALLBRIDGE,
   );
 
-  console.log(
-    "[soroban-tx-builder] gasFeeOptions:",
-    JSON.stringify(gasFeeOptions, null, 2),
-  );
-
+  
   // Prefer paying with the source stablecoin so the user doesn't need
   // extra XLM beyond the Soroban inclusion fee.
   const stableFee =
     gasFeeOptions?.[FeePaymentMethod.WITH_STABLECOIN]?.[AmountFormat.INT];
 
   if (stableFee) {
-    console.log("[soroban-tx-builder] Using WITH_STABLECOIN fee:", stableFee);
-    return { gasAmount: "0", feeTokenAmount: String(stableFee) };
+        return { gasAmount: "0", feeTokenAmount: String(stableFee) };
   }
 
   // Fallback to native XLM payment
@@ -295,15 +256,10 @@ export async function getAllbridgeGasFee(
     gasFeeOptions?.[FeePaymentMethod.WITH_NATIVE_CURRENCY]?.[AmountFormat.INT];
 
   if (nativeFee) {
-    console.log(
-      "[soroban-tx-builder] Using WITH_NATIVE_CURRENCY fee:",
-      nativeFee,
-    );
-    return { gasAmount: String(nativeFee), feeTokenAmount: "0" };
+        return { gasAmount: String(nativeFee), feeTokenAmount: "0" };
   }
 
-  console.warn("[soroban-tx-builder] Could not determine gas fee, using 0/0");
-  return { gasAmount: "0", feeTokenAmount: "0" };
+    return { gasAmount: "0", feeTokenAmount: "0" };
 }
 
 /* ------------------------------------------------------------------ */
@@ -333,11 +289,7 @@ export async function getAllbridgeGasFeeOptions(
     Messenger.ALLBRIDGE,
   );
 
-  console.log(
-    "[soroban-tx-builder] gasFeeOptions (full):",
-    JSON.stringify(gasFeeOptions, null, 2),
-  );
-
+  
   return {
     native: {
       int: String(

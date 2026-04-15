@@ -34,13 +34,11 @@ export async function GET(
       error?.message?.includes("404");
 
     if (is404) {
-      console.warn(`Bridge status 404 for tx ${txHash} — returning pending`);
       return NextResponse.json({
         data: { status: "pending", txHash },
       });
     }
 
-    console.error("Bridge status error:", error);
     return NextResponse.json(
       { error: error.message || "Failed to get bridge status" },
       { status: 500 },

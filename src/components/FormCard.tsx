@@ -155,7 +155,6 @@ export function FormCard({
           setGasFeeOptions(data.feeOptions);
         }
       } catch (err) {
-        console.error("Failed to fetch gas fee options:", err);
       } finally {
         setIsLoadingFees(false);
       }
@@ -183,7 +182,6 @@ export function FormCard({
           setCurrency(supportedCurrencies[0].code);
         }
       } catch (error) {
-        console.error("Failed to fetch currencies:", error);
       } finally {
         setIsLoadingCurrencies(false);
       }
@@ -212,7 +210,6 @@ export function FormCard({
         const institutions = Array.isArray(data?.data) ? data.data : [];
         setBanks(institutions);
       } catch (error) {
-        console.error("Failed to fetch banks:", error);
         setBanks([]);
       } finally {
         setIsLoadingBanks(false);
@@ -246,7 +243,6 @@ export function FormCard({
             typeof resolvedAccountName === "string" ? resolvedAccountName : "",
           );
         } catch (error) {
-          console.error("Failed to verify account:", error);
           setAccountName("");
         } finally {
           setIsVerifyingAccount(false);
@@ -328,7 +324,6 @@ export function FormCard({
           }
           setQuote(directQuote);
         } catch (error) {
-          console.error("Failed to get quote:", error);
           setQuote(null);
         } finally {
           setIsLoadingQuote(false);

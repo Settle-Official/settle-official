@@ -25,7 +25,6 @@ export async function GET() {
 
     return NextResponse.json({ feeOptions });
   } catch (error: any) {
-    console.error("[gas-fee-options] Error:", error.message);
     return NextResponse.json(
       { error: error.message || "Failed to fetch gas fee options" },
       { status: 500 },

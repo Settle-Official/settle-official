@@ -67,7 +67,6 @@ export class TransactionStorage {
       const stored = localStorage.getItem(STORAGE_KEY);
       return stored ? JSON.parse(stored) : [];
     } catch (error) {
-      console.error("Failed to parse transactions:", error);
       return [];
     }
   }

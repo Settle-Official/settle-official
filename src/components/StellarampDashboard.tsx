@@ -1,14 +1,14 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { RECENT_OFFRAMPS } from "@/data/stellaramp";
 import { FormCard } from "@/components/FormCard";
 import { Header } from "@/components/Header";
 import { ProgressSteps } from "@/components/ProgressSteps";
 import { RecentOfframpsTable } from "@/components/RecentOfframpsTable";
-import { RightPanel } from "@/components/RightPanel";
+import { RightPanel, type PlatformStats } from "@/components/RightPanel";
 import { useStellarWallet } from "@/hooks/useStellarWallet";
 import { TransactionStorage, Transaction } from "@/lib/transaction-storage";
+import { ErrorToast } from "@/components/ErrorToast";
 import {
   TransactionProgressModal,
   type OfframpStep,
@@ -104,6 +104,7 @@ export function StellarampDashboard() {
   const [formResetKey, setFormResetKey] = useState(0);
   const [offrampStep, setOfframpStep] = useState<OfframpStep>("idle");
   const [offrampError, setOfframpError] = useState<string | null>(null);
+  const [toastError, setToastError] = useState<string | null>(null);
   const [showProgressModal, setShowProgressModal] = useState(false);
   const [tradeState, setTradeState] = useState<{
     stellarTxHash?: string;
@@ -136,6 +137,16 @@ export function StellarampDashboard() {
     isLoadingQuote: false,
     currency: "NGN",
   });
+
+  const [platformStats, setPlatformStats] = useState<PlatformStats | null>(null);
+
+  // Fetch stats on mount
+  useEffect(() => {
+    fetch("/api/stats")
+      .then((r) => r.json())
+      .then(setPlatformStats)
+      .catch(() => {});
+  }, []);
 
   // Load user transactions when wallet connects
   useEffect(() => {
@@ -204,8 +215,7 @@ export function StellarampDashboard() {
           : "0.00";
         setStellarXlmBalance(xlmDisplay);
       } catch (error) {
-        console.error("Failed to fetch Stellar balances:", error);
-        setStellarUsdcBalance("0.00");
+                setStellarUsdcBalance("0.00");
         setStellarXlmBalance("0.00");
       } finally {
         setIsLoadingBalance(false);
@@ -217,10 +227,19 @@ export function StellarampDashboard() {
 
   const handleConnect = async () => {
     try {
-      await connect();
+      const connected = await connect();
+      if (connected?.publicKey) {
+        fetch("/api/stats", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ wallet: connected.publicKey }),
+        })
+          .then((r) => r.json())
+          .then(setPlatformStats)
+          .catch(() => {});
+      }
     } catch (error) {
-      console.error("Failed to connect wallet:", error);
-    }
+          }
   };
 
   const handleDisconnect = () => {
@@ -245,31 +264,30 @@ export function StellarampDashboard() {
       throw new Error("Wallet not connected");
     }
     if (!pricingState.quote) {
-      throw new Error("Quote unavailable. Please enter an amount first.");
+      setToastError("Quote unavailable. Please enter an amount first.");
+      return;
     }
 
     // Pre-flight: check USDC balance
     const usdcBal = parseFloat((stellarUsdcBalance ?? "0").replace(/,/g, ""));
     const sendAmount = parseFloat(tradeData.amount);
     if (usdcBal < sendAmount) {
-      throw new Error(
+      setToastError(
         `Insufficient USDC balance. You have ${usdcBal.toFixed(2)} USDC but are trying to send ${sendAmount} USDC.`,
       );
+      return;
     }
 
     // Pre-flight: if paying gas in XLM, check XLM balance vs approximate cost + reserve
     if (tradeData.feePaymentMethod === "native") {
       const xlmBal = parseFloat((stellarXlmBalance ?? "0").replace(/,/g, ""));
-      // Stellar minimum reserve: base (1 XLM) + 0.5 per trustline/entry.
-      // Conservatively assume 1.5 XLM reserve + ~0.01 tx fee.
-      const MIN_XLM_RESERVE = 3; // conservative: 1 base + subentries + tx fee headroom
-      // The native gas fee is ~2.26 XLM currently. If the user has less than
-      // reserve + estimated gas, warn them before we hit the simulation error.
-      const estimatedGas = 2.5; // rough upper bound for native gas
+      const MIN_XLM_RESERVE = 3;
+      const estimatedGas = 2.5;
       if (xlmBal < MIN_XLM_RESERVE + estimatedGas) {
-        throw new Error(
+        setToastError(
           `Insufficient XLM for native gas fee. You have ${xlmBal.toFixed(2)} XLM but need ~${(MIN_XLM_RESERVE + estimatedGas).toFixed(1)} XLM (gas + account reserve). Switch to USDC fee payment or add more XLM.`,
         );
+        return;
       }
     }
 
@@ -447,8 +465,7 @@ export function StellarampDashboard() {
 
       // 5) Submit to Stellar network
       setOfframpStep("submitting");
-      console.log("Submitting transaction to Stellar network...");
-      let stellarTxHash: string;
+            let stellarTxHash: string;
 
       // Detect Soroban ops safely – default to Soroban path since Allbridge
       // bridge txs are always invokeHostFunction.
@@ -468,11 +485,7 @@ export function StellarampDashboard() {
           );
         }
       } catch (parseErr) {
-        console.warn(
-          "Could not parse signed XDR to detect op types; defaulting to Soroban path:",
-          parseErr,
-        );
-      }
+              }
 
       if (hasSorobanOps) {
         // Submit via server route which forwards raw XDR to the Soroban RPC
@@ -500,12 +513,7 @@ export function StellarampDashboard() {
           clearTimeout(submitTimer);
         }
         const submitPayload = await submitResponse.json().catch(() => ({}));
-        console.log(
-          "[submit] Response:",
-          submitResponse.status,
-          submitPayload?.status,
-        );
-        if (!submitResponse.ok) {
+                if (!submitResponse.ok) {
           throw new Error(
             submitPayload?.error ||
               `Soroban transaction error: ${formatSorobanError(
@@ -524,10 +532,7 @@ export function StellarampDashboard() {
         // If PENDING, poll the lightweight tx-status endpoint from the client
         // instead of relying on server-side polling (avoids Vercel timeout).
         if (submitPayload?.status === "PENDING") {
-          console.log(
-            "[submit] Transaction PENDING — polling tx-status from client...",
-          );
-          const maxPollAttempts = 30; // 30 × 3s = 90s
+                    const maxPollAttempts = 30; // 30 × 3s = 90s
           let confirmed = false;
 
           for (let i = 0; i < maxPollAttempts; i++) {
@@ -537,10 +542,7 @@ export function StellarampDashboard() {
                 `/api/offramp/bridge/tx-status/${stellarTxHash}`,
               );
               const statusData = await statusRes.json().catch(() => ({}));
-              console.log(
-                `[submit] tx-status poll ${i + 1}/${maxPollAttempts}: ${statusData?.status}`,
-              );
-
+              
               if (statusData?.status === "SUCCESS") {
                 confirmed = true;
                 break;
@@ -553,8 +555,7 @@ export function StellarampDashboard() {
               // NOT_FOUND — keep polling
             } catch (pollErr: any) {
               if (pollErr?.message?.includes("failed on-chain")) throw pollErr;
-              console.warn("[submit] tx-status poll error:", pollErr.message);
-            }
+                          }
           }
 
           if (!confirmed) {
@@ -598,11 +599,7 @@ export function StellarampDashboard() {
       // Payout polling is what actually matters (Paycrest settling to the bank).
       const bridgeResult = pollBridgeStatus(txId, stellarTxHash).catch(
         (err) => {
-          console.warn(
-            "Bridge status polling ended without completion:",
-            err.message,
-          );
-          // Don't fail the overall flow — bridge may still complete in background
+                    // Don't fail the overall flow — bridge may still complete in background
         },
       );
       const payoutResult = pollPayoutStatus(txId, payoutOrderId);
@@ -621,20 +618,40 @@ export function StellarampDashboard() {
       TransactionStorage.update(txId, { status: "completed" });
       setUserTransactions(TransactionStorage.getByUser(wallet.publicKey));
 
+      // Update platform stats with completed transaction volume + push to live feed
+      const completedAmount = parseFloat(tradeData.amount);
+      if (completedAmount > 0) {
+        const ngnAmount = pricingState.quote?.destinationAmount
+          ? `₦${parseFloat(pricingState.quote.destinationAmount).toLocaleString("en-NG", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+          : "₦--";
+        const shortHash = tradeState.stellarTxHash
+          ? `${tradeState.stellarTxHash.slice(0, 4)}...${tradeState.stellarTxHash.slice(-4)}`
+          : "----...----";
+        fetch("/api/stats", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            volume: completedAmount,
+            offramp: {
+              txHash: shortHash,
+              usdc: completedAmount.toFixed(2),
+              naira: ngnAmount,
+              status: "COMPLETE",
+            },
+          }),
+        })
+          .then((r) => r.json())
+          .then(setPlatformStats)
+          .catch(() => {});
+      }
+
       // Reset the form so the user can start a fresh offramp
       setFormResetKey((k) => k + 1);
     } catch (error: any) {
-      console.error("Trade execution error:", error);
-
+      
       // Log detailed Horizon error if available
       if (error?.response?.data) {
-        console.error("Horizon error details:", {
-          status: error.response.status,
-          title: error.response.data.title,
-          detail: error.response.data.detail,
-          extras: error.response.data.extras,
-        });
-      }
+              }
 
       setTradeState((prev) => ({ ...prev, error: error.message }));
       setOfframpStep("error");
@@ -667,14 +684,8 @@ export function StellarampDashboard() {
         const response = await fetch(`/api/offramp/bridge/status/${txHash}`);
         if (!response.ok) {
           consecutiveErrors++;
-          console.warn(
-            `Bridge status poll HTTP ${response.status} (${consecutiveErrors}/${MAX_ERRORS})`,
-          );
-          if (consecutiveErrors >= MAX_ERRORS) {
-            console.warn(
-              "Bridge polling: too many consecutive errors, giving up",
-            );
-            return; // soft exit — don't throw
+                    if (consecutiveErrors >= MAX_ERRORS) {
+                        return; // soft exit — don't throw
           }
           await new Promise((resolve) => setTimeout(resolve, 10000));
           attempts++;
@@ -695,15 +706,8 @@ export function StellarampDashboard() {
       } catch (error: any) {
         if (error?.message === "Bridge transfer failed") throw error;
         consecutiveErrors++;
-        console.warn(
-          `Bridge status poll error (${consecutiveErrors}/${MAX_ERRORS}):`,
-          error.message,
-        );
-        if (consecutiveErrors >= MAX_ERRORS) {
-          console.warn(
-            "Bridge polling: too many consecutive errors, giving up",
-          );
-          return; // soft exit
+                if (consecutiveErrors >= MAX_ERRORS) {
+                    return; // soft exit
         }
       }
 
@@ -712,10 +716,7 @@ export function StellarampDashboard() {
     }
 
     // Timeout is NOT fatal — bridge may still complete
-    console.warn(
-      "Bridge polling timeout (5 min) — bridge may still be processing",
-    );
-  };
+      };
 
   const pollPayoutStatus = async (txId: string, orderId: string) => {
     const maxAttempts = 60;
@@ -804,6 +805,7 @@ export function StellarampDashboard() {
             </div>
             <div className="row-span-2 col-start-2 max-[1100px]:order-2 max-[1100px]:row-auto max-[1100px]:col-auto">
               <RightPanel
+                stats={platformStats}
                 isConnected={isConnected}
                 isConnecting={isConnecting}
                 amount={pricingState.amount}
@@ -814,7 +816,10 @@ export function StellarampDashboard() {
               />
             </div>
             <div className="col-start-1 max-[1100px]:order-3 max-[1100px]:col-auto">
-              <RecentOfframpsTable rows={RECENT_OFFRAMPS} />
+              <RecentOfframpsTable
+                rows={platformStats?.recentOfframps ?? []}
+                isLive={true}
+              />
             </div>
           </div>
 
@@ -824,6 +829,8 @@ export function StellarampDashboard() {
           />
         </div>
       </section>
+
+      <ErrorToast message={toastError} onDismiss={() => setToastError(null)} />
 
       <TransactionProgressModal
         isOpen={showProgressModal}

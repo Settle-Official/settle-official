@@ -34,7 +34,6 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ data: accountName });
   } catch (error: any) {
-    console.error("Account verification error:", error);
     return NextResponse.json(
       { error: error.message || "Failed to verify account" },
       { status: 500 }

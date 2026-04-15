@@ -17,7 +17,6 @@ export async function GET(
 
     return NextResponse.json({ data: status });
   } catch (error: any) {
-    console.error("Paycrest order status error:", error);
     return NextResponse.json(
       { error: error.message || "Failed to fetch Paycrest order status" },
       { status: 500 }

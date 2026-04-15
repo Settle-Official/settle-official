@@ -33,8 +33,7 @@ export class PaycrestAdapter implements PayoutProviderAdapter {
     options: RequestInit = {},
   ): Promise<T> {
     const url = `${PAYCREST_API_BASE}${endpoint}`;
-    console.log(`Paycrest API request: ${options.method || "GET"} ${url}`);
-
+    
     // Abort after 15 seconds to avoid hanging on network issues
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), 15_000);
@@ -68,13 +67,7 @@ export class PaycrestAdapter implements PayoutProviderAdapter {
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
-      console.error(`Paycrest API error (${response.status}):`, {
-        endpoint,
-        status: response.status,
-        statusText: response.statusText,
-        error,
-      });
-      const message =
+            const message =
         error?.message ||
         error?.error ||
         `Paycrest API error: ${response.status} ${response.statusText}`;
@@ -82,8 +75,7 @@ export class PaycrestAdapter implements PayoutProviderAdapter {
     }
 
     const data = await response.json();
-    console.log(`Paycrest API response from ${endpoint}:`, data);
-    return data.data || data;
+        return data.data || data;
   }
 
   async getCurrencies(): Promise<

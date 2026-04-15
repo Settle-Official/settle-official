@@ -103,7 +103,6 @@ export async function POST(request: NextRequest) {
       validUntil: new Date(Date.now() + 5 * 60 * 1000), // 5 minutes validity
     });
   } catch (error: any) {
-    console.error("Quote error:", error);
     return NextResponse.json(
       { error: error.message || "Failed to generate quote" },
       { status: 500 }

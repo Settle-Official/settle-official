@@ -75,12 +75,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.log(
-      "[submit-soroban] Submitting signed XDR to Soroban RPC (length=%d, rpc=%s)",
-      signedXdr.length,
-      SOROBAN_RPC_URL,
-    );
-
+    
     // ---- Diagnostic: parse the signed tx to log auth expiration ----
     try {
       const NETWORK_PASSPHRASE =
@@ -99,64 +94,30 @@ export async function POST(request: NextRequest) {
                 const credType = creds.switch().name;
                 if (credType === "sorobanCredentialsAddress") {
                   const exp = creds.address().signatureExpirationLedger();
-                  console.log(
-                    "[submit-soroban] Auth entry %d: type=%s, signatureExpirationLedger=%d",
-                    i,
-                    credType,
-                    exp,
-                  );
-                } else {
-                  console.log(
-                    "[submit-soroban] Auth entry %d: type=%s",
-                    i,
-                    credType,
-                  );
-                }
+                                  } else {
+                                  }
               }
             }
           }
         }
-        console.log(
-          "[submit-soroban] Parsed tx: source=%s, fee=%s, seq=%s, timeBounds=%s",
-          (parsed as StellarSdk.Transaction).source,
-          (parsed as StellarSdk.Transaction).fee,
-          (parsed as StellarSdk.Transaction).sequence,
-          JSON.stringify((parsed as StellarSdk.Transaction).timeBounds),
-        );
-      }
+              }
     } catch (parseErr: any) {
-      console.warn(
-        "[submit-soroban] Could not parse signed XDR for diagnostics:",
-        parseErr?.message,
-      );
-    }
+          }
 
     // ---- 1. Send the raw signed XDR directly (no SDK re-serialisation) ----
     const sendResult = await sorobanRpc("sendTransaction", {
       transaction: signedXdr,
     });
 
-    console.log(
-      "[submit-soroban] sendTransaction full result:",
-      safeJson(sendResult),
-    );
-
+    
     const hash: string | undefined = sendResult?.hash;
     const sendStatus: string = sendResult?.status || "UNKNOWN";
 
     // Log diagnostic info if present (Soroban RPC includes these on errors)
     if (sendResult?.errorResultXdr) {
-      console.error(
-        "[submit-soroban] errorResultXdr:",
-        sendResult.errorResultXdr,
-      );
-    }
+          }
     if (sendResult?.diagnosticEventsXdr) {
-      console.error(
-        "[submit-soroban] diagnosticEventsXdr:",
-        safeJson(sendResult.diagnosticEventsXdr),
-      );
-    }
+          }
 
     // Reject ERROR and TRY_AGAIN_LATER statuses outright.
     if (sendStatus === "ERROR" || sendStatus === "TRY_AGAIN_LATER") {
@@ -173,12 +134,7 @@ export async function POST(request: NextRequest) {
           // ignore decode failures
         }
       }
-      console.error(
-        "[submit-soroban] sendTransaction rejected with status:",
-        sendStatus,
-        decodedError ? `(${decodedError})` : "",
-      );
-      return NextResponse.json(
+            return NextResponse.json(
         {
           error: `Soroban sendTransaction ${sendStatus}${decodedError ? `: ${decodedError}` : ""}`,
           details: sendResult,
@@ -191,11 +147,7 @@ export async function POST(request: NextRequest) {
     // It may be processing or already confirmed — return the hash and let
     // the client poll tx-status to find the real outcome.
     if (sendStatus === "DUPLICATE") {
-      console.log(
-        "[submit-soroban] Transaction DUPLICATE — returning hash for client-side polling:",
-        hash,
-      );
-      return NextResponse.json({
+            return NextResponse.json({
         hash,
         status: "PENDING",
       });
@@ -217,33 +169,19 @@ export async function POST(request: NextRequest) {
     // Instead of polling here for 90s, return the hash + PENDING status so the
     // client can poll a lightweight /tx-status endpoint.
     if (sendStatus === "PENDING") {
-      console.log(
-        "[submit-soroban] Transaction PENDING — returning hash for client-side polling:",
-        hash,
-      );
-      return NextResponse.json({
+            return NextResponse.json({
         hash,
         status: "PENDING",
       });
     }
 
     // Already SUCCESS or some other terminal status
-    console.log(
-      "[submit-soroban] sendTransaction returned terminal status:",
-      sendStatus,
-      "hash:",
-      hash,
-    );
-    return NextResponse.json({
+        return NextResponse.json({
       hash,
       status: sendStatus,
     });
   } catch (error: any) {
-    console.error("[submit-soroban] Error:", {
-      message: error?.message,
-      stack: error?.stack,
-    });
-    return NextResponse.json(
+        return NextResponse.json(
       {
         error: error?.message || "Failed to submit Soroban transaction",
         details:
