@@ -10,58 +10,56 @@ export function useStellarWallet() {
 
   const adapter = getStellarWalletAdapter();
 
-  // Check for existing connection on mount
   useEffect(() => {
     const existingWallet = adapter.getWallet();
-    if (existingWallet) {
-      setWallet(existingWallet);
-    }
+    if (existingWallet) setWallet(existingWallet);
   }, []);
 
   const connect = useCallback(async (walletType?: WalletType) => {
     setIsConnecting(true);
     setError(null);
-
     try {
       let connectedWallet: StellarWallet;
-
       if (walletType === "freighter") {
         connectedWallet = await adapter.connectFreighter();
       } else if (walletType === "lobstr") {
         connectedWallet = await adapter.connectLobstr();
       } else {
-        // Auto-detect
         connectedWallet = await adapter.connectAuto();
       }
-
       setWallet(connectedWallet);
       return connectedWallet;
     } catch (err: any) {
-      const errorMessage = err.message || "Failed to connect wallet";
-      setError(errorMessage);
+      setError(err.message || "Failed to connect wallet");
       throw err;
     } finally {
       setIsConnecting(false);
     }
   }, []);
 
-  const disconnect = useCallback(() => {
+  /** Called after WalletConnect session is approved — sets wallet state directly. */
+  const connectViaWalletConnect = useCallback((publicKey: string) => {
+    const connectedWallet = adapter.connectWalletConnect(publicKey);
+    setWallet(connectedWallet);
+    return connectedWallet;
+  }, []);
+
+  const disconnect = useCallback(async () => {
+    if (wallet?.type === "walletconnect") {
+      const { disconnectWalletConnect } = await import("@/lib/stellar/walletconnect-adapter");
+      await disconnectWalletConnect();
+    }
     adapter.disconnect();
     setWallet(null);
     setError(null);
-  }, []);
+  }, [wallet]);
 
   const signTransaction = useCallback(async (xdr: string): Promise<string> => {
-    if (!wallet) {
-      throw new Error("No wallet connected");
-    }
-
+    if (!wallet) throw new Error("No wallet connected");
     try {
-      const signedXdr = await adapter.signTransaction(xdr);
-      return signedXdr;
+      return await adapter.signTransaction(xdr);
     } catch (err: any) {
-      const errorMessage = err.message || "Failed to sign transaction";
-      setError(errorMessage);
+      setError(err.message || "Failed to sign transaction");
       throw err;
     }
   }, [wallet]);
@@ -72,6 +70,7 @@ export function useStellarWallet() {
     isConnecting,
     error,
     connect,
+    connectViaWalletConnect,
     disconnect,
     signTransaction,
   };

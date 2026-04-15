@@ -13,6 +13,8 @@
     "@stellar/freighter-api": "^6.0.1",
     "@stellar/stellar-sdk": "^14.6.1",
     "@upstash/redis": "^1.37.0",
+    "@walletconnect/sign-client": "^2.23.9",
+    "@walletconnect/types": "^2.23.9",
     "next": "^15.5.12",
     "react": "19.0.0",
     "react-dom": "19.0.0",

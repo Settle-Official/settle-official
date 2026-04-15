@@ -19,6 +19,8 @@ import {
   getAllbridgeTokens,
   initializeAllbridgeSdk,
 } from "@/lib/offramp/adapters/allbridge-adapter";
+import { MobileWalletModal } from "@/components/MobileWalletModal";
+import { isMobileDevice, isInsideFreighterBrowser } from "@/lib/stellar/wallet-adapter";
 
 /** Run a promise with a timeout. Rejects with a clear message on expiry. */
 function withTimeout<T>(
@@ -95,6 +97,7 @@ export function StellarampDashboard() {
     isConnected,
     isConnecting,
     connect,
+    connectViaWalletConnect,
     disconnect,
     signTransaction,
   } = useStellarWallet();
@@ -121,6 +124,7 @@ export function StellarampDashboard() {
     null,
   );
   const [isLoadingBalance, setIsLoadingBalance] = useState(false);
+  const [showMobileWalletModal, setShowMobileWalletModal] = useState(false);
   const [pricingState, setPricingState] = useState<{
     amount: string;
     quote: {
@@ -226,6 +230,10 @@ export function StellarampDashboard() {
   }, [wallet?.publicKey]);
 
   const handleConnect = async () => {
+    if (isMobileDevice() && !isInsideFreighterBrowser()) {
+      setShowMobileWalletModal(true);
+      return;
+    }
     try {
       const connected = await connect();
       if (connected?.publicKey) {
@@ -844,6 +852,16 @@ export function StellarampDashboard() {
           setIsExecutingOfframp(false);
         }}
       />
+
+      {showMobileWalletModal && (
+        <MobileWalletModal
+          onClose={() => setShowMobileWalletModal(false)}
+          onConnected={(publicKey) => {
+            connectViaWalletConnect(publicKey);
+            setShowMobileWalletModal(false);
+          }}
+        />
+      )}
     </main>
   );
 }
