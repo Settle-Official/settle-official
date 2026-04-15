@@ -72,24 +72,11 @@ export async function POST(request: NextRequest) {
       returnAddress,
     };
 
-    console.log("Creating Paycrest order with request:", {
-      amount: normalizedPayload.amount,
-      token: normalizedPayload.token,
-      network: normalizedPayload.network,
-      currency: normalizedPayload.recipient.currency,
-      institution: normalizedPayload.recipient.institution,
-      accountIdentifier: normalizedPayload.recipient.accountIdentifier,
-      reference: normalizedPayload.reference,
-    });
-
+    
     const paycrest = new PaycrestAdapter(apiKey);
 
     const order = await paycrest.createOrder(normalizedPayload as any);
-    console.log("Paycrest order created successfully:", {
-      orderId: order.id,
-      receiveAddress: order.receiveAddress,
-    });
-    
+        
     return NextResponse.json({ data: order });
   } catch (error: any) {
     const statusCode =
@@ -97,13 +84,7 @@ export async function POST(request: NextRequest) {
         ? error.status
         : 500;
 
-    console.error("Paycrest create order error:", {
-      message: error.message,
-      status: error?.status,
-      details: error?.details,
-      stack: error.stack,
-    });
-
+    
     return NextResponse.json(
       { 
         error: error.message || "Failed to create Paycrest order",

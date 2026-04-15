@@ -88,10 +88,7 @@ export async function GET(
     // (Horizon indexes all transactions, sometimes sooner for classic-wrapped Soroban ops)
     const horizonStatus = await checkHorizon(hash);
     if (horizonStatus !== "NOT_FOUND") {
-      console.log(
-        `[tx-status] Soroban RPC returned NOT_FOUND but Horizon returned ${horizonStatus} for ${hash}`,
-      );
-      return NextResponse.json({
+            return NextResponse.json({
         hash,
         status: horizonStatus,
         source: "horizon",
@@ -101,12 +98,7 @@ export async function GET(
     return NextResponse.json({ hash, status: "NOT_FOUND", source: "both" });
   } catch (error: any) {
     // Even if Soroban RPC errored, try Horizon
-    console.error(
-      "[tx-status] Soroban RPC error:",
-      error.message,
-      "— trying Horizon...",
-    );
-    const horizonStatus = await checkHorizon(hash);
+        const horizonStatus = await checkHorizon(hash);
     if (horizonStatus !== "NOT_FOUND") {
       return NextResponse.json({
         hash,

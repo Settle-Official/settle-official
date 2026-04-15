@@ -13,7 +13,6 @@ export async function GET() {
 
     return NextResponse.json({ data: currencies });
   } catch (error: any) {
-    console.error("Currencies fetch error:", error);
     return NextResponse.json(
       { error: error.message || "Failed to fetch currencies" },
       { status: 500 }

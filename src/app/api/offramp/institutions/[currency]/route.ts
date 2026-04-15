@@ -18,7 +18,6 @@ export async function GET(
 
     return NextResponse.json({ data: institutions });
   } catch (error: any) {
-    console.error("Institutions fetch error:", error);
     return NextResponse.json(
       { error: error.message || "Failed to fetch institutions" },
       { status: 500 }

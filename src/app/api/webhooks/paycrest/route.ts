@@ -38,7 +38,6 @@ export async function POST(request: NextRequest) {
     }
 
     const webhookData = JSON.parse(body);
-    console.log("Paycrest webhook received:", webhookData);
 
     const { event, data } = webhookData;
     const payoutStatus = mapPaycrestStatus(event);
@@ -48,7 +47,6 @@ export async function POST(request: NextRequest) {
     // 2. Notify the user via websocket/SSE
     // 3. Trigger any post-processing logic
 
-    console.log(`Order ${data.id} status updated to: ${payoutStatus}`);
 
     // TODO: Implement persistent storage
     // await db.trade.update({
@@ -58,7 +56,6 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true });
   } catch (error: any) {
-    console.error("Webhook processing error:", error);
     return NextResponse.json(
       { error: error.message || "Webhook processing failed" },
       { status: 500 }

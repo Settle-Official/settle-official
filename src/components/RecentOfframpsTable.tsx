@@ -2,10 +2,12 @@ import type { RecentOfframpRow } from "@/types/stellaramp";
 
 export interface RecentOfframpsTableProps {
   readonly rows: ReadonlyArray<RecentOfframpRow>;
+  readonly isLive?: boolean;
 }
 
 export function RecentOfframpsTable({
   rows,
+  isLive,
 }: Readonly<RecentOfframpsTableProps>) {
   return (
     <section className="border border-[var(--line)] bg-[#0a0a0a] p-[0.8rem]">
@@ -13,12 +15,12 @@ export function RecentOfframpsTable({
         <h2 className="m-0 font-space-grotesk font-bold text-[1.50rem]">
           RECENT OFFRAMPS
         </h2>
-        <button
-          type="button"
-          className="text-[0.62rem] tracking-[0.06em] text-[var(--accent)] max-[720px]:text-[0.5rem]"
-        >
-          VIEW ALL
-        </button>
+        {isLive && (
+          <span className="flex items-center gap-1.5 text-[0.62rem] tracking-[0.06em] text-[var(--accent)]">
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--accent)] [animation:pulse_1.2s_ease-in-out_infinite]" />
+            LIVE
+          </span>
+        )}
       </div>
       <table className="w-full border-collapse text-[0.72rem] max-[720px]:block max-[720px]:overflow-x-auto">
         <thead>

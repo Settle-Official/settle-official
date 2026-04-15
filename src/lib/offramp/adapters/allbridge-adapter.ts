@@ -60,11 +60,7 @@ export async function initializeAllbridgeSdk() {
     ...legacyOverrides,
   };
 
-  console.log("Initializing Allbridge SDK with RPC URLs:", {
-    SRB: rpcUrls.SRB,
-    STLR: rpcUrls.STLR,
-  });
-
+  
   return new AllbridgeCoreSdk(rpcUrls);
 }
 
@@ -120,14 +116,7 @@ export async function buildAllbridgeSendTx(
   const { Messenger } = await import("@allbridge/bridge-core-sdk");
 
   try {
-    console.log("Building Allbridge send transaction with params:", {
-      amount: params.amount,
-      fromAddress: params.fromAddress,
-      toAddress: params.toAddress,
-      sourceTokenSymbol: params.sourceToken?.symbol,
-      destinationTokenSymbol: params.destinationToken?.symbol,
-    });
-
+    
     // Check if approval is needed (for Stellar, this might not be required)
     // But we'll check anyway to be safe
     try {
@@ -138,13 +127,11 @@ export async function buildAllbridgeSendTx(
       }));
 
       if (needsApproval) {
-        console.log("Approval needed for Allbridge transfer");
-        // For Stellar, approval might be handled differently or not needed
+                // For Stellar, approval might be handled differently or not needed
         // We'll let the transaction build proceed
       }
     } catch (approvalError: any) {
-      console.warn("Could not check allowance (might not be needed for Stellar):", approvalError.message);
-      // Continue anyway - Stellar might not need approval
+            // Continue anyway - Stellar might not need approval
     }
 
     // Build the transaction XDR for Stellar
@@ -157,17 +144,11 @@ export async function buildAllbridgeSendTx(
       messenger: Messenger.ALLBRIDGE,
     });
 
-    console.log("Successfully built Allbridge transaction, XDR length:", rawTx?.length);
-
+    
     // For Stellar, rawTx is the XDR string
     return rawTx;
   } catch (error: any) {
-    console.error("Error in buildAllbridgeSendTx:", {
-      message: error.message,
-      stack: error.stack,
-      response: error.response?.data,
-    });
-    throw new Error(`Failed to build Allbridge transaction: ${error.message}`);
+        throw new Error(`Failed to build Allbridge transaction: ${error.message}`);
   }
 }
 
@@ -214,8 +195,7 @@ export async function getAllbridgeTransferStatus(
       receiveAmount: transferStatus.receiveAmount,
     };
   } catch (error: any) {
-    console.error("Error getting Allbridge transfer status:", error);
-    // If we can't get status, assume it's still pending
+        // If we can't get status, assume it's still pending
     return {
       status: "pending",
       txHash,
