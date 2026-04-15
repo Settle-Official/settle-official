@@ -45,7 +45,16 @@ export function MobileWalletModal({ onClose, onConnected }: MobileWalletModalPro
       onConnected(session.publicKey);
       onClose();
     } catch (err: any) {
-      setErrorMsg(err.message || "Connection failed");
+      // Surface the real error — "failed to publish" usually means bad project ID
+      // or relay connectivity issue
+      const msg = err?.message || "Connection failed";
+      setErrorMsg(
+        msg.toLowerCase().includes("project")
+          ? msg
+          : msg.toLowerCase().includes("publish") || msg.toLowerCase().includes("relay")
+          ? "Could not reach WalletConnect relay. Check your project ID and internet connection."
+          : msg
+      );
       setState("error");
     }
   }

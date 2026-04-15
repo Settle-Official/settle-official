@@ -1,28 +1,42 @@
 // WalletConnect v2 adapter for Freighter Mobile
-// Freighter mobile only supports WalletConnect — no browser extension injection
 
 import SignClient from "@walletconnect/sign-client";
 import type { SessionTypes } from "@walletconnect/types";
 
 const STELLAR_CHAIN = "stellar:pubnet";
 const STELLAR_METHODS = ["stellar_signXDR"];
+const RELAY_URL = "wss://relay.walletconnect.com";
 
 let client: SignClient | null = null;
 let activeSession: SessionTypes.Struct | null = null;
 
 async function getClient(): Promise<SignClient> {
+  // Always create a fresh client — reusing a failed client causes relay errors
   if (client) return client;
+
+  const projectId = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID;
+  if (!projectId || projectId === "your_walletconnect_project_id_here") {
+    throw new Error(
+      "WalletConnect project ID is not set. Add NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID to .env.local"
+    );
+  }
+
   client = await SignClient.init({
-    projectId: process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID!,
+    projectId,
+    relayUrl: RELAY_URL,
     metadata: {
       name: "Stellaramp",
       description: "Stellar USDC to Naira offramp",
       url: typeof window !== "undefined" ? window.location.origin : "",
-      icons: ["/icons/icon-192.png"],
+      icons: [
+        typeof window !== "undefined"
+          ? `${window.location.origin}/icons/icon-192.png`
+          : "",
+      ],
     },
   });
 
-  // Restore existing session if any
+  // Restore existing valid session if any
   const sessions = client.session.getAll();
   if (sessions.length > 0) {
     activeSession = sessions[sessions.length - 1];
@@ -36,15 +50,14 @@ export interface WalletConnectSession {
   topic: string;
 }
 
-/**
- * Create a WalletConnect session proposal.
- * Returns the wc: URI to deep-link into Freighter and a promise that resolves
- * when the user approves the session in the wallet.
- */
 export async function proposeWalletConnectSession(): Promise<{
   uri: string;
   approval: Promise<WalletConnectSession>;
 }> {
+  // Reset client on each new proposal so stale relay connections don't cause
+  // "failed to publish" errors
+  client = null;
+
   const wc = await getClient();
 
   const { uri, approval } = await wc.connect({
@@ -61,7 +74,6 @@ export async function proposeWalletConnectSession(): Promise<{
 
   const approvalPromise = approval().then((session) => {
     activeSession = session;
-    // accounts format: "stellar:pubnet:GABC..."
     const account = session.namespaces.stellar?.accounts?.[0] ?? "";
     const publicKey = account.split(":")[2];
     if (!publicKey) throw new Error("No Stellar account in WalletConnect session");
@@ -71,9 +83,6 @@ export async function proposeWalletConnectSession(): Promise<{
   return { uri, approval: approvalPromise };
 }
 
-/**
- * Sign a transaction XDR via WalletConnect (Freighter mobile).
- */
 export async function signXdrViaWalletConnect(xdr: string): Promise<string> {
   if (!activeSession) throw new Error("No active WalletConnect session");
   const wc = await getClient();
@@ -108,4 +117,5 @@ export async function disconnectWalletConnect(): Promise<void> {
     // ignore if already gone
   }
   activeSession = null;
+  client = null;
 }
