@@ -97,6 +97,7 @@ export function StellarampDashboard() {
     isConnected,
     isConnecting,
     connect,
+    connectViaWalletConnect,
     disconnect,
     signTransaction,
   } = useStellarWallet();
@@ -853,7 +854,13 @@ export function StellarampDashboard() {
       />
 
       {showMobileWalletModal && (
-        <MobileWalletModal onClose={() => setShowMobileWalletModal(false)} />
+        <MobileWalletModal
+          onClose={() => setShowMobileWalletModal(false)}
+          onConnected={(publicKey) => {
+            connectViaWalletConnect(publicKey);
+            setShowMobileWalletModal(false);
+          }}
+        />
       )}
     </main>
   );
