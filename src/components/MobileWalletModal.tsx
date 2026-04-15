@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { openFreighterMobile, openLobstrMobile } from "@/lib/stellar/wallet-adapter";
 
 interface MobileWalletModalProps {
   onClose: () => void;
@@ -15,16 +14,29 @@ export function MobileWalletModal({ onClose }: MobileWalletModalProps) {
     requestAnimationFrame(() => setVisible(true));
   }, []);
 
+  function openInFreighter() {
+    const universalLink = `https://freighter.app/open?url=${encodeURIComponent(appUrl)}`;
+    const isAndroid = /Android/i.test(navigator.userAgent);
+    const storeUrl = isAndroid
+      ? "https://play.google.com/store/apps/details?id=io.freighter"
+      : "https://apps.apple.com/app/freighter/id1556917137";
+
+    const start = Date.now();
+    window.location.href = universalLink;
+    setTimeout(() => {
+      if (Date.now() - start < 2000) window.open(storeUrl, "_blank");
+    }, 1500);
+
+    onClose();
+  }
+
   return (
     <div
       className={`fixed inset-0 z-50 flex items-center justify-center transition-opacity duration-300 ${
         visible ? "opacity-100" : "opacity-0"
       }`}
     >
-      <div
-        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
-        onClick={onClose}
-      />
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
 
       <div className="racing-border-wrapper relative z-10">
         <div className="racing-border-content min-w-[380px] max-w-[440px] max-[500px]:min-w-[90vw] bg-[#0c0c0c] p-6">
@@ -42,36 +54,20 @@ export function MobileWalletModal({ onClose }: MobileWalletModalProps) {
           </div>
 
           <p className="m-0 mb-4 font-mono text-[0.78rem] text-[var(--muted)]">
-            Open this app inside your wallet&apos;s built-in browser to connect.
+            This will open Stellaramp inside the Freighter app browser where your wallet is available.
           </p>
 
-          <div className="flex flex-col gap-[0.1rem]">
-            {[
-              {
-                label: "Freighter",
-                sub: "Open Stellaramp in Freighter browser",
-                onClick: () => { openFreighterMobile(appUrl); onClose(); },
-              },
-              {
-                label: "Lobstr",
-                sub: "Open Stellaramp in Lobstr browser",
-                onClick: () => { openLobstrMobile(appUrl); onClose(); },
-              },
-            ].map(({ label, sub, onClick }) => (
-              <button
-                key={label}
-                type="button"
-                onClick={onClick}
-                className="flex items-center gap-3 bg-[#1a1a1a] px-3 py-[0.75rem] text-left font-mono text-[0.82rem] text-white transition-colors hover:bg-[#222] focus:outline-none"
-              >
-                <span className="flex-shrink-0 w-5 text-center text-[var(--accent)]">→</span>
-                <span className="flex flex-col">
-                  <span className="font-bold tracking-[0.04em]">{label}</span>
-                  <span className="text-[0.72rem] text-[var(--muted)]">{sub}</span>
-                </span>
-              </button>
-            ))}
-          </div>
+          <button
+            type="button"
+            onClick={openInFreighter}
+            className="flex w-full items-center gap-3 bg-[#1a1a1a] px-3 py-[0.75rem] text-left font-mono text-[0.82rem] text-white transition-colors hover:bg-[#222] focus:outline-none"
+          >
+            <span className="flex-shrink-0 w-5 text-center text-[var(--accent)]">→</span>
+            <span className="flex flex-col">
+              <span className="font-bold tracking-[0.04em]">Connect with Freighter</span>
+              <span className="text-[0.72rem] text-[var(--muted)]">Opens in Freighter in-app browser</span>
+            </span>
+          </button>
 
           <button
             type="button"

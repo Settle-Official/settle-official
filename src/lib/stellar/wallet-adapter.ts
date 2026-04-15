@@ -11,49 +11,9 @@ export function isMobileDevice(): boolean {
   );
 }
 
-/**
- * Open Freighter mobile — directs user to open the app's built-in browser.
- * Freighter mobile has no external deep-link connection protocol; dApps must
- * be opened from inside the Freighter in-app browser.
- */
-export function openFreighterMobile(appUrl: string): void {
-  const isAndroid = /Android/i.test(navigator.userAgent);
-  // Freighter's in-app browser universal link (works on both platforms)
-  // Format: https://freighter.app/open?url=<encoded-dapp-url>
-  const universalLink = `https://freighter.app/open?url=${encodeURIComponent(appUrl)}`;
-  const storeUrl = isAndroid
-    ? "https://play.google.com/store/apps/details?id=io.freighter"
-    : "https://apps.apple.com/app/freighter/id1556917137";
-
-  // Try universal link first; if it fails (app not installed) fall back to store
-  const start = Date.now();
-  window.location.href = universalLink;
-  setTimeout(() => {
-    if (Date.now() - start < 2000) {
-      window.open(storeUrl, "_blank");
-    }
-  }, 1500);
-}
-
-/**
- * Open Lobstr mobile — directs user to open the app's built-in browser.
- * Lobstr's universal link scheme opens the app and navigates to the given URL.
- */
-export function openLobstrMobile(appUrl: string): void {
-  const isAndroid = /Android/i.test(navigator.userAgent);
-  // Lobstr universal link opens the app's in-app browser at the given URL
-  const universalLink = `https://lobstr.co/open?url=${encodeURIComponent(appUrl)}`;
-  const storeUrl = isAndroid
-    ? "https://play.google.com/store/apps/details?id=com.lobstr.client"
-    : "https://apps.apple.com/app/lobstr-stellar-wallet/id1404357892";
-
-  const start = Date.now();
-  window.location.href = universalLink;
-  setTimeout(() => {
-    if (Date.now() - start < 2000) {
-      window.open(storeUrl, "_blank");
-    }
-  }, 1500);
+/** True when running inside Freighter's in-app browser (window.freighter is injected). */
+export function isInsideFreighterBrowser(): boolean {
+  return typeof window !== "undefined" && !!(window as any).freighter;
 }
 
 export interface StellarWallet {

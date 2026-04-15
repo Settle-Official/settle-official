@@ -20,7 +20,7 @@ import {
   initializeAllbridgeSdk,
 } from "@/lib/offramp/adapters/allbridge-adapter";
 import { MobileWalletModal } from "@/components/MobileWalletModal";
-import { isMobileDevice } from "@/lib/stellar/wallet-adapter";
+import { isMobileDevice, isInsideFreighterBrowser } from "@/lib/stellar/wallet-adapter";
 
 /** Run a promise with a timeout. Rejects with a clear message on expiry. */
 function withTimeout<T>(
@@ -229,7 +229,7 @@ export function StellarampDashboard() {
   }, [wallet?.publicKey]);
 
   const handleConnect = async () => {
-    if (isMobileDevice()) {
+    if (isMobileDevice() && !isInsideFreighterBrowser()) {
       setShowMobileWalletModal(true);
       return;
     }
