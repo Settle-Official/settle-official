@@ -4,6 +4,48 @@ import * as freighterApi from "@stellar/freighter-api";
 
 export type WalletType = "freighter" | "lobstr";
 
+export function isMobileDevice(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return /Android|iPhone|iPad|iPod|Opera Mini|IEMobile|WPDesktop/i.test(
+    navigator.userAgent,
+  );
+}
+
+/**
+ * Open Freighter mobile app via deep link.
+ * Falls back to App Store / Play Store if not installed.
+ */
+export function openFreighterMobile(): void {
+  const appUrl = `https://stellaramp.app`; // replace with your actual hosted URL
+  const freighterDeepLink = `freighter://open?url=${encodeURIComponent(appUrl)}`;
+  const isAndroid = /Android/i.test(navigator.userAgent);
+  const storeUrl = isAndroid
+    ? "https://play.google.com/store/apps/details?id=io.freighter"
+    : "https://apps.apple.com/app/freighter/id1556917137";
+
+  const start = Date.now();
+  window.location.href = freighterDeepLink;
+  setTimeout(() => {
+    if (Date.now() - start < 2000) {
+      window.open(storeUrl, "_blank");
+    }
+  }, 1500);
+}
+
+/**
+ * Open Lobstr mobile app via deep link.
+ * Falls back to App Store / Play Store if not installed.
+ */
+export function openLobstrMobile(): void {
+  const isAndroid = /Android/i.test(navigator.userAgent);
+  const storeUrl = isAndroid
+    ? "https://play.google.com/store/apps/details?id=com.lobstr.client"
+    : "https://apps.apple.com/app/lobstr-stellar-wallet/id1404357892";
+
+  // Lobstr supports universal links; open store directly
+  window.open(storeUrl, "_blank");
+}
+
 export interface StellarWallet {
   type: WalletType;
   publicKey: string;
