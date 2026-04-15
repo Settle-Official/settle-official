@@ -9,6 +9,7 @@ interface MobileWalletModalProps {
 
 export function MobileWalletModal({ onClose }: MobileWalletModalProps) {
   const [visible, setVisible] = useState(false);
+  const appUrl = typeof window !== "undefined" ? window.location.href : "";
 
   useEffect(() => {
     requestAnimationFrame(() => setVisible(true));
@@ -41,20 +42,20 @@ export function MobileWalletModal({ onClose }: MobileWalletModalProps) {
           </div>
 
           <p className="m-0 mb-4 font-mono text-[0.78rem] text-[var(--muted)]">
-            Choose your Stellar wallet app to continue.
+            Open this app inside your wallet&apos;s built-in browser to connect.
           </p>
 
           <div className="flex flex-col gap-[0.1rem]">
             {[
               {
                 label: "Freighter",
-                sub: "Open in Freighter app",
-                onClick: () => { openFreighterMobile(); onClose(); },
+                sub: "Open Stellaramp in Freighter browser",
+                onClick: () => { openFreighterMobile(appUrl); onClose(); },
               },
               {
                 label: "Lobstr",
-                sub: "Open in Lobstr app",
-                onClick: () => { openLobstrMobile(); onClose(); },
+                sub: "Open Stellaramp in Lobstr browser",
+                onClick: () => { openLobstrMobile(appUrl); onClose(); },
               },
             ].map(({ label, sub, onClick }) => (
               <button
