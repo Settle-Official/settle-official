@@ -17,6 +17,7 @@ html,
 body {
   margin: 0;
   padding: 0;
+  overflow-x: hidden;
   background: radial-gradient(circle at top right, #1a1a1a 0%, var(--bg) 45%);
   color: var(--text);
   font-family:
@@ -129,4 +130,32 @@ button {
 
 .animate-scale-in {
   animation: scale-in 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+/* Marquee for mobile/tablet banner */
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+.marquee-outer {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+}
+
+.marquee-inner {
+  display: flex;
+  width: max-content;
+  animation: marquee 18s linear infinite;
+}
+
+.marquee-inner span {
+  white-space: nowrap;
+  padding: 0.35rem 2rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #0a0a0a;
 }
