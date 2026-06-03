@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
         accountIdentifier: beneficiary.accountIdentifier,
         accountName: beneficiary.accountName,
         currency: beneficiary.currency,
-        memo: beneficiary.memo || "Stellaramp offramp",
+        memo: beneficiary.memo || "Settle offramp",
       },
       returnAddress: baseReturnAddress,
     };

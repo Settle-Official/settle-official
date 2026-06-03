@@ -32,7 +32,7 @@ export function Header({
       <header className="flex items-center justify-between gap-4 max-[720px]:items-start max-[720px]:flex-col">
         <div>
           <h1 className="m-0 font-space-grotesk font-bold text-[clamp(1.7rem,2.4vw,2.6rem)] tracking-[-0.04em]">
-            STELLARAMP
+            SETTLE
           </h1>
           <p className="mt-[0.35rem] mb-0 text-[0.88rem] text-[var(--muted)]">
             {subtitle}

@@ -20,7 +20,7 @@ export function ProgressSteps({ isConnected, isConnecting }: Readonly<ProgressSt
       title: isConnected ? "CONNECTED ✓" : "CONNECT WALLET",
       description: isConnected 
         ? "Connection successful. Proceed with transfer."
-        : "Authorize Stellaramp from your wallet extension.",
+        : "Authorize Settle from your wallet extension.",
     },
     {
       id: "s2",
