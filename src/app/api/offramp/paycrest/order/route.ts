@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
       accountName: String(body?.recipient?.accountName || "").trim(),
       memo: body?.recipient?.memo
         ? String(body.recipient.memo).trim()
-        : "Stellaramp offramp",
+        : "Settle offramp",
       metadata: body?.recipient?.metadata ?? {},
       currency: String(body?.recipient?.currency || "").toUpperCase(),
     };

@@ -18,13 +18,13 @@ const spaceGrotesk = Space_Grotesk({
 });
 
 export const metadata: Metadata = {
-  title: "Stellaramp - Swift & Seamless",
+  title: "Settle - Swift & Seamless",
   description: "Wallet-first Web3 offramp flow for Stellar Blockchain",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "Stellaramp",
+    title: "Settle",
   },
   icons: {
     apple: "/icons/icon-192.png",

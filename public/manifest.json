@@ -1,6 +1,6 @@
 {
-  "name": "Stellaramp",
-  "short_name": "Stellaramp",
+  "name": "Settle",
+  "short_name": "Settle",
   "description": "Stellar USDC to Naira offramp",
   "start_url": "/",
   "display": "standalone",

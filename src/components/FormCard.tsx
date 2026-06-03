@@ -376,7 +376,7 @@ export function FormCard({
         accountIdentifier: accountNumber,
         accountName,
         currency,
-        memo: "Stellaramp offramp",
+        memo: "Settle offramp",
       },
     });
   };

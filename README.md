@@ -1,6 +1,6 @@
-# Stellaramp
+# Settle
 
-Stellaramp is a Next.js offramp app that converts **Stellar USDC** to **Naira bank payout** using:
+Settle is a Next.js offramp app that converts **Stellar USDC** to **Naira bank payout** using:
 - **Allbridge** for bridge flow (Stellar -> Base)
 - **Paycrest** for fiat payout orchestration (USDC -> NGN)
 - **Freighter/Lobstr** for Stellar wallet signing

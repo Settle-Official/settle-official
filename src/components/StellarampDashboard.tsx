@@ -381,7 +381,7 @@ export function StellarampDashboard() {
               institution: tradeData.beneficiary.institution,
               accountIdentifier: tradeData.beneficiary.accountIdentifier,
               accountName: tradeData.beneficiary.accountName,
-              memo: tradeData.beneficiary.memo || "Stellaramp offramp",
+              memo: tradeData.beneficiary.memo || "Settle offramp",
               currency: tradeData.beneficiary.currency,
             },
             returnAddress: baseReturnAddress,
