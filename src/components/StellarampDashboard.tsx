@@ -102,6 +102,7 @@ export function StellarampDashboard() {
     signTransaction,
   } = useStellarWallet();
 
+  const [mode, setMode] = useState<"offramp" | "onramp">("offramp");
   const [currentTxId, setCurrentTxId] = useState<string | null>(null);
   const [isExecutingOfframp, setIsExecutingOfframp] = useState(false);
   const [formResetKey, setFormResetKey] = useState(0);
@@ -799,42 +800,77 @@ export function StellarampDashboard() {
             onDisconnect={handleDisconnect}
           />
 
-          <div className="grid grid-cols-[1fr_370px] gap-3 max-[1100px]:grid-cols-1">
-            <div className="max-[1100px]:order-1">
-              <FormCard
-                isConnected={isConnected}
-                isConnecting={isConnecting}
-                isExecutingOfframp={isExecutingOfframp}
-                resetKey={formResetKey}
-                onConnect={handleConnect}
-                onInitiateOfframp={handleExecuteTrade}
-                onPricingUpdate={handlePricingUpdate}
-              />
-            </div>
-            <div className="row-span-2 col-start-2 max-[1100px]:order-2 max-[1100px]:row-auto max-[1100px]:col-auto">
-              <RightPanel
-                stats={platformStats}
-                isConnected={isConnected}
-                isConnecting={isConnecting}
-                amount={pricingState.amount}
-                quote={pricingState.quote}
-                isLoadingQuote={pricingState.isLoadingQuote}
-                currency={pricingState.currency}
-                onConnect={handleConnect}
-              />
-            </div>
-            <div className="col-start-1 max-[1100px]:order-3 max-[1100px]:col-auto">
-              <RecentOfframpsTable
-                rows={platformStats?.recentOfframps ?? []}
-                isLive={true}
-              />
-            </div>
+          <div className="flex gap-2">
+            {(["onramp", "offramp"] as const).map((m) => {
+              const isActive = mode === m;
+              return (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setMode(m)}
+                  aria-pressed={isActive}
+                  className={`min-w-[150px] border-4 border-[#C9A962] px-4 py-[0.6rem] text-[0.75rem] font-semibold uppercase tracking-[0.08em] rounded-none transition-colors focus:outline-none focus:ring-2 focus:ring-[#C9A962]/70 ${
+                    isActive
+                      ? "bg-[#C9A962] text-[#0a0a0a]"
+                      : "bg-[#101010] text-[#f4e1ad] hover:bg-[#C9A962] hover:text-[#0a0a0a]"
+                  }`}
+                >
+                  {m === "onramp" ? "On-ramp" : "Off-ramp"}
+                </button>
+              );
+            })}
           </div>
 
-          <ProgressSteps
-            isConnected={isConnected}
-            isConnecting={isConnecting}
-          />
+          {mode === "onramp" ? (
+            <div className="flex min-h-[40vh] flex-col items-center justify-center gap-3 border border-[#1f1f1f] bg-[var(--bg)] py-16 text-center">
+              <h2 className="m-0 font-space-grotesk text-[clamp(1.6rem,3vw,2.6rem)] font-bold uppercase tracking-[-0.03em] text-[#C9A962]">
+                Coming Soon
+              </h2>
+              <p className="m-0 max-w-[28rem] text-[0.95rem] text-[var(--muted)]">
+                On-ramp is on its way. For now, switch to Off-ramp to convert
+                Stellar USDC to your bank account.
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-[1fr_370px] gap-3 max-[1100px]:grid-cols-1">
+                <div className="max-[1100px]:order-1">
+                  <FormCard
+                    isConnected={isConnected}
+                    isConnecting={isConnecting}
+                    isExecutingOfframp={isExecutingOfframp}
+                    resetKey={formResetKey}
+                    onConnect={handleConnect}
+                    onInitiateOfframp={handleExecuteTrade}
+                    onPricingUpdate={handlePricingUpdate}
+                  />
+                </div>
+                <div className="row-span-2 col-start-2 max-[1100px]:order-2 max-[1100px]:row-auto max-[1100px]:col-auto">
+                  <RightPanel
+                    stats={platformStats}
+                    isConnected={isConnected}
+                    isConnecting={isConnecting}
+                    amount={pricingState.amount}
+                    quote={pricingState.quote}
+                    isLoadingQuote={pricingState.isLoadingQuote}
+                    currency={pricingState.currency}
+                    onConnect={handleConnect}
+                  />
+                </div>
+                <div className="col-start-1 max-[1100px]:order-3 max-[1100px]:col-auto">
+                  <RecentOfframpsTable
+                    rows={platformStats?.recentOfframps ?? []}
+                    isLive={true}
+                  />
+                </div>
+              </div>
+
+              <ProgressSteps
+                isConnected={isConnected}
+                isConnecting={isConnecting}
+              />
+            </>
+          )}
         </div>
       </section>
 
