@@ -22,19 +22,33 @@ export interface RecentOfframpEntry {
   status: "SETTLING" | "COMPLETE";
 }
 
+/**
+ * Reads a numeric key from Redis as a guaranteed `number`.
+ *
+ * `redis.get<number>(...)` is a lie: counters written with `incr`/`incrbyfloat`
+ * come back as strings at runtime, so doing arithmetic on the raw value
+ * silently string-concatenates instead of adding. This coerces and guards
+ * against missing/NaN values, returning `fallback` (default 0) when absent.
+ */
+async function getNumber(key: string, fallback = 0): Promise<number> {
+  const raw = await redis.get<number | string | null>(key);
+  const value = Number(raw ?? fallback);
+  return Number.isFinite(value) ? value : fallback;
+}
+
 export async function getStats(): Promise<{
   totalUsers: number;
   totalVolume: number;
   recentOfframps: RecentOfframpEntry[];
 }> {
   const [users, volume, offramps] = await Promise.all([
-    redis.get<number>(KEYS.users),
-    redis.get<number>(KEYS.volume),
+    getNumber(KEYS.users),
+    getNumber(KEYS.volume),
     redis.lrange<RecentOfframpEntry>(KEYS.recentOfframps, 0, 9),
   ]);
   return {
-    totalUsers: (users ?? 0) + SEED_USERS,
-    totalVolume: (volume ?? 0) + SEED_VOLUME,
+    totalUsers: users + SEED_USERS,
+    totalVolume: volume + SEED_VOLUME,
     recentOfframps: offramps ?? [],
   };
 }
