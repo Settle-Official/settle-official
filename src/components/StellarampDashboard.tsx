@@ -727,39 +727,64 @@ export function StellarampDashboard() {
     // Timeout is NOT fatal — bridge may still complete
       };
 
-  const pollPayoutStatus = async (txId: string, orderId: string) => {
-    const maxAttempts = 60;
-    let attempts = 0;
+  const pollPayoutStatus = (txId: string, orderId: string) => {
+    // Webhook-driven: the server persists Paycrest events to Redis and streams
+    // them here over SSE. EventSource auto-reconnects, and the stream re-reads
+    // Redis on connect, so status survives Vercel's function timeout and even a
+    // closed tab (state is restored on the next connect).
+    return new Promise<void>((resolve, reject) => {
+      const source = new EventSource(`/api/offramp/stream/${orderId}`);
 
-    while (attempts < maxAttempts) {
-      const response = await fetch(`/api/offramp/paycrest/order/${orderId}`);
-      if (!response.ok) {
-        throw new Error(`Paycrest status polling failed: ${response.status}`);
-      }
-      const payload = await response.json();
-      const status = payload?.data || payload;
+      const finish = (fn: () => void) => {
+        source.close();
+        fn();
+      };
 
-      setTradeState((prev) => ({ ...prev, payoutStatus: status.status }));
-      TransactionStorage.update(txId, { payoutStatus: status.status });
-      setUserTransactions(TransactionStorage.getByUser(wallet!.publicKey));
+      source.onmessage = (evt) => {
+        let record: { status?: string };
+        try {
+          record = JSON.parse(evt.data);
+        } catch {
+          return;
+        }
+        const status = record.status;
+        if (!status) return;
 
-      // Advance modal to "settling" once Paycrest validates the deposit
-      if (status.status === "validated" || status.status === "settled") {
-        setOfframpStep((prev) =>
-          prev === "processing" || prev === "settling" ? "settling" : prev,
-        );
-      }
+        setTradeState((prev) => ({ ...prev, payoutStatus: status }));
+        TransactionStorage.update(txId, { payoutStatus: status });
+        setUserTransactions(TransactionStorage.getByUser(wallet!.publicKey));
 
-      if (
-        ["validated", "settled", "refunded", "expired"].includes(status.status)
-      )
-        return;
+        // Advance the modal to "settling" once the deposit is validated or the
+        // onchain release is underway.
+        if (
+          status === "validated" ||
+          status === "settling" ||
+          status === "settled"
+        ) {
+          setOfframpStep((prev) =>
+            prev === "processing" || prev === "settling" ? "settling" : prev,
+          );
+        }
 
-      await new Promise((resolve) => setTimeout(resolve, 10000));
-      attempts++;
-    }
+        // Terminal states. Only "settled" means fiat has actually landed —
+        // resolve there, not on "validated".
+        if (status === "settled") {
+          finish(resolve);
+        } else if (status === "refunded" || status === "expired") {
+          finish(() =>
+            reject(new Error(`Payout ${status} before settlement`)),
+          );
+        }
+      };
 
-    throw new Error("Payout polling timeout");
+      source.onerror = () => {
+        // Transient errors trigger EventSource's built-in reconnect; only treat
+        // a fully closed connection as fatal.
+        if (source.readyState === EventSource.CLOSED) {
+          finish(() => reject(new Error("Payout status stream closed")));
+        }
+      };
+    });
   };
 
   const getSubtitle = () => {

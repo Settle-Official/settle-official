@@ -162,20 +162,28 @@ export class PaycrestAdapter implements PayoutProviderAdapter {
   }
 }
 
-// Helper function to map Paycrest webhook status to our PayoutStatus
+// Helper function to map Paycrest webhook event names to our PayoutStatus.
+// Prefer the bare `data.status` from the v2 payload; use this only as a
+// fallback when a status field is absent.
 export function mapPaycrestStatus(webhookStatus: string): PayoutStatus {
   switch (webhookStatus) {
     case "payment_order.pending":
       return "pending";
+    case "payment_order.deposited":
+      return "deposited";
     case "payment_order.validated":
       return "validated";
+    case "payment_order.settling":
+      return "settling";
     case "payment_order.settled":
       return "settled";
+    case "payment_order.refunding":
+      return "refunding";
     case "payment_order.refunded":
       return "refunded";
     case "payment_order.expired":
       return "expired";
     default:
-      return "pending";
+      return "unknown";
   }
 }
