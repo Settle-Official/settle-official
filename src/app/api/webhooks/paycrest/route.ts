@@ -2,10 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "crypto";
 import { mapPaycrestStatus } from "@/lib/offramp/adapters/paycrest-adapter";
 import { setPayoutStatus } from "@/lib/offramp/payout-store";
-import type { PayoutStatus } from "@/lib/offramp/types";
+import type { PayoutStatus, OnrampStatus } from "@/lib/offramp/types";
+import { updateOnrampOrder } from "@/lib/onramp/onramp-store";
+import { handleOnrampSettled } from "@/lib/onramp/handle-settlement";
+import { notify } from "@/lib/notify/telegram";
 
 // Needs Node's crypto and the raw request body; keep off the edge runtime.
 export const runtime = "nodejs";
+// Onramp `settled` triggers the Base→Stellar bridge inline (approve + broadcast).
+// Give it room; the bridge lock prevents a retry from double-spending.
+export const maxDuration = 60;
 
 const KNOWN_STATUSES: ReadonlySet<string> = new Set<PayoutStatus>([
   "pending",
@@ -58,7 +64,13 @@ export async function POST(request: NextRequest) {
 
     const { event, data } = JSON.parse(body) as {
       event?: string;
-      data?: { id?: string; status?: string; amount?: string; txHash?: string };
+      data?: {
+        id?: string;
+        status?: string;
+        amount?: string;
+        txHash?: string;
+        direction?: string;
+      };
     };
 
     const orderId = data?.id;
@@ -75,12 +87,46 @@ export async function POST(request: NextRequest) {
         ? (rawStatus as PayoutStatus)
         : mapPaycrestStatus(event ?? "");
 
+    // Route by direction. Onramp needs the custodial Base→Stellar bridge; the
+    // existing offramp path just persists status for the client SSE stream.
+    if (data?.direction === "onramp") {
+      await updateOnrampOrder(orderId, {
+        status: status as OnrampStatus,
+        ...(data?.amount ? { baseUsdcAmount: data.amount } : {}),
+      });
+
+      if (status === "settled") {
+        // Bridge inline. handleOnrampSettled is lock-guarded and hold-and-alert
+        // on failure, so it's safe under Paycrest's retries.
+        await handleOnrampSettled(orderId, data?.amount);
+      } else if (status === "refunded" || status === "expired") {
+        void notify(
+          `Onramp <code>${orderId}</code> ${status}` +
+            (data?.amount ? ` (${data.amount})` : ""),
+          "warning",
+        );
+      }
+
+      return NextResponse.json({ success: true });
+    }
+
+    // --- Offramp (existing behavior) ---
     await setPayoutStatus(orderId, {
       status,
       amount: data?.amount,
       txHash: data?.txHash,
       event,
     });
+
+    if (status === "settled") {
+      void notify(
+        `Offramp <code>${orderId}</code> settled to bank` +
+          (data?.amount ? ` (${data.amount})` : ""),
+        "success",
+      );
+    } else if (status === "refunded" || status === "expired") {
+      void notify(`Offramp <code>${orderId}</code> ${status}`, "warning");
+    }
 
     // 2xx quickly so Paycrest marks the delivery successful.
     return NextResponse.json({ success: true });

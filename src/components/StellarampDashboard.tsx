@@ -6,6 +6,8 @@ import { Header } from "@/components/Header";
 import { ProgressSteps } from "@/components/ProgressSteps";
 import { RecentOfframpsTable } from "@/components/RecentOfframpsTable";
 import { RightPanel, type PlatformStats } from "@/components/RightPanel";
+import { PlatformStatsCard } from "@/components/PlatformStatsCard";
+import { OnrampPanel } from "@/components/OnrampPanel";
 import { useStellarWallet } from "@/hooks/useStellarWallet";
 import { TransactionStorage, Transaction } from "@/lib/transaction-storage";
 import { ErrorToast } from "@/components/ErrorToast";
@@ -847,14 +849,24 @@ export function StellarampDashboard() {
           </div>
 
           {mode === "onramp" ? (
-            <div className="flex min-h-[40vh] flex-col items-center justify-center gap-3 border border-[#1f1f1f] bg-[var(--bg)] py-16 text-center">
-              <h2 className="m-0 font-space-grotesk text-[clamp(1.6rem,3vw,2.6rem)] font-bold uppercase tracking-[-0.03em] text-[#C9A962]">
-                Coming Soon
-              </h2>
-              <p className="m-0 max-w-[28rem] text-[0.95rem] text-[var(--muted)]">
-                On-ramp is on its way. For now, switch to Off-ramp to convert
-                Stellar USDC to your bank account.
-              </p>
+            <div className="grid grid-cols-[1fr_370px] gap-3 max-[1100px]:grid-cols-1">
+              <div className="max-[1100px]:order-1">
+                <OnrampPanel
+                  isConnected={isConnected}
+                  isConnecting={isConnecting}
+                  walletAddress={wallet?.publicKey}
+                  onConnect={handleConnect}
+                />
+              </div>
+              <div className="col-start-2 max-[1100px]:order-2 max-[1100px]:col-auto">
+                <PlatformStatsCard stats={platformStats} />
+              </div>
+              <div className="col-start-1 max-[1100px]:order-3 max-[1100px]:col-auto">
+                <RecentOfframpsTable
+                  rows={platformStats?.recentOfframps ?? []}
+                  isLive={true}
+                />
+              </div>
             </div>
           ) : (
             <>

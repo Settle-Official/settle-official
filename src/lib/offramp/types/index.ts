@@ -131,3 +131,61 @@ export interface ApiError {
   message: string;
   details?: unknown;
 }
+
+// ---------------------------------------------------------------------------
+// Onramp (fiat → crypto) — Paycrest v2
+// ---------------------------------------------------------------------------
+
+// Lifecycle of an onramp order, from fiat deposit through Stellar delivery.
+// The first block mirrors Paycrest's payment_order.* events; the bridge_* /
+// delivered states are added by us for the Base→Stellar leg.
+export type OnrampStatus =
+  | "pending" // order created, awaiting fiat
+  | "deposited" // fiat received
+  | "validated" // fiat confirmed by provider
+  | "settling" // Paycrest releasing USDC onchain (to our Base hot wallet)
+  | "settled" // USDC in platform Base hot wallet — bridge can start
+  | "bridging" // Base→Stellar bridge submitted
+  | "delivered" // USDC delivered to user's Stellar wallet
+  | "bridge_failed" // funds held; manual resolution required
+  | "refunding"
+  | "refunded"
+  | "expired"
+  | "unknown";
+
+export interface OnrampRefundAccount {
+  institution: string;
+  accountIdentifier: string;
+  accountName: string;
+}
+
+export interface CreateOnrampOrderParams {
+  fiatAmount: string; // denominated in fiat (amountIn = "fiat")
+  currency: string; // NGN, KES, ...
+  country?: string; // ISO 3166-1 alpha-2
+  recipientAddress: string; // platform Base hot wallet (EVM)
+  network?: string; // defaults to "base"
+  cryptoCurrency?: string; // defaults to "USDC"
+  refundAccount: OnrampRefundAccount;
+  rate?: number;
+  reference?: string;
+}
+
+// The virtual bank account the user deposits fiat into.
+export interface OnrampProviderAccount {
+  institution: string;
+  accountIdentifier: string;
+  accountName: string;
+  amountToTransfer: string;
+  currency: string;
+  validUntil: string;
+}
+
+export interface OnrampOrderResponse {
+  id: string;
+  status: string;
+  amount: string;
+  rate?: string;
+  reference?: string;
+  providerAccount: OnrampProviderAccount;
+}
