@@ -5,9 +5,14 @@ import type {
   PayoutOrderRequest,
   PayoutOrderResponse,
   PayoutStatus,
+  CreateOnrampOrderParams,
+  OnrampOrderResponse,
 } from "../types";
 
 const PAYCREST_API_BASE = "https://api.paycrest.io/v1";
+// Onramp requires v2 (v1 is offramp-only). Kept separate so the working v1
+// offramp path is untouched.
+const PAYCREST_API_V2_BASE = "https://api.paycrest.io/v2";
 
 class PaycrestHttpError extends Error {
   status: number;
@@ -31,8 +36,9 @@ export class PaycrestAdapter implements PayoutProviderAdapter {
   private async fetch<T>(
     endpoint: string,
     options: RequestInit = {},
+    baseUrl: string = PAYCREST_API_BASE,
   ): Promise<T> {
-    const url = `${PAYCREST_API_BASE}${endpoint}`;
+    const url = `${baseUrl}${endpoint}`;
     
     // Abort after 15 seconds to avoid hanging on network issues
     const abort = new AbortController();
@@ -159,6 +165,62 @@ export class PaycrestAdapter implements PayoutProviderAdapter {
     id: string;
   }> {
     return this.fetch(`/sender/orders/${orderId}`);
+  }
+
+  // --- Onramp (fiat → crypto), Paycrest v2 ---------------------------------
+
+  /**
+   * Create an onramp order. Returns the order id plus the virtual bank account
+   * (providerAccount) the user must deposit fiat into. The crypto is delivered
+   * to `recipientAddress` on `network` — for our custodial flow that's the
+   * platform Base hot wallet, which then bridges to the user's Stellar wallet.
+   */
+  async createOnrampOrder(
+    params: CreateOnrampOrderParams,
+  ): Promise<OnrampOrderResponse> {
+    const body = {
+      amount: params.fiatAmount,
+      amountIn: "fiat" as const,
+      ...(params.rate ? { rate: params.rate } : {}),
+      ...(params.reference ? { reference: params.reference } : {}),
+      source: {
+        type: "fiat" as const,
+        currency: params.currency.toUpperCase(),
+        ...(params.country ? { country: params.country } : {}),
+        refundAccount: {
+          institution: params.refundAccount.institution,
+          accountIdentifier: params.refundAccount.accountIdentifier,
+          accountName: params.refundAccount.accountName,
+        },
+      },
+      destination: {
+        type: "crypto" as const,
+        currency: (params.cryptoCurrency ?? "USDC").toUpperCase(),
+        recipient: {
+          address: params.recipientAddress,
+          network: (params.network ?? "base").toLowerCase(),
+        },
+      },
+    };
+
+    return this.fetch<OnrampOrderResponse>(
+      "/sender/orders",
+      { method: "POST", body: JSON.stringify(body) },
+      PAYCREST_API_V2_BASE,
+    );
+  }
+
+  /** Fetch a v2 order's current status (onramp or offramp). */
+  async getOrderStatusV2(orderId: string): Promise<{
+    id: string;
+    status: string;
+    direction?: string;
+  }> {
+    return this.fetch(
+      `/sender/orders/${orderId}`,
+      {},
+      PAYCREST_API_V2_BASE,
+    );
   }
 }
 

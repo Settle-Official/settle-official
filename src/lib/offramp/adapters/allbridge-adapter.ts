@@ -57,6 +57,10 @@ export async function initializeAllbridgeSdk() {
     // Use a widely available public mainnet Stellar RPC by default.
     SRB: process.env.STELLAR_SOROBAN_RPC_URL || "https://soroban-rpc.mainnet.stellar.gateway.fm",
     STLR: process.env.STELLAR_HORIZON_URL || "https://horizon.stellar.org",
+    // Base (BAS) RPC — required for the onramp Base→Stellar leg (EVM allowance
+    // reads + tx building). Falls back to the SDK default when unset, which is
+    // fine for offramp (it never reads Base state).
+    ...(process.env.BASE_RPC_URL ? { BAS: process.env.BASE_RPC_URL } : {}),
     ...legacyOverrides,
   };
 
