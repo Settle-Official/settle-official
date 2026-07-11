@@ -1,31 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  listPendingBridges,
-  getOnrampOrder,
-  updateOnrampOrder,
-  removePendingBridge,
-} from "@/lib/onramp/onramp-store";
-import {
-  initializeAllbridgeSdk,
-  getAllbridgeTransferStatus,
-} from "@/lib/offramp/adapters/allbridge-adapter";
-import { notify, alertManualAction } from "@/lib/notify/telegram";
+import { listPendingBridges } from "@/lib/onramp/onramp-store";
+import { initializeAllbridgeSdk } from "@/lib/offramp/adapters/allbridge-adapter";
+import { finalizeOnrampOrder } from "@/lib/onramp/finalize";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-// If a bridge hasn't confirmed within this window, escalate for manual review
-// (funds may be stuck) but keep watching.
-const STALE_MS = 30 * 60 * 1000; // 30 min
-
 /**
- * Finalizer: watches in-flight Base→Stellar bridges and marks orders
- * `delivered` once Allbridge confirms. Runs on a schedule (Vercel cron) so it
- * works even when the user has closed their tab. Idempotent — safe to run as
- * often as the cron fires.
+ * Backstop finalizer: sweeps all in-flight Base→Stellar bridges and advances
+ * any that have confirmed. On Vercel Hobby this only fires once per day (the
+ * open SSE session is the fast path); on Pro it can run every couple minutes.
+ * Idempotent — safe at any cadence.
  *
- * Auth: Vercel cron sends `Authorization: Bearer $CRON_SECRET`. In production
- * we require it; if CRON_SECRET is unset we allow the call (local/dev).
+ * Auth: Vercel cron sends `Authorization: Bearer $CRON_SECRET`. Required in
+ * production; if CRON_SECRET is unset the call is allowed (local/dev).
  */
 export async function GET(request: NextRequest) {
   const secret = process.env.CRON_SECRET;
@@ -45,75 +33,12 @@ export async function GET(request: NextRequest) {
 
   let delivered = 0;
   let stillPending = 0;
-  const now = Date.now();
 
   for (const orderId of orderIds) {
     try {
-      const record = await getOnrampOrder(orderId);
-
-      // Order gone or no longer bridging — stop watching it.
-      if (!record || record.status !== "bridging" || !record.bridgeTxHash) {
-        await removePendingBridge(orderId);
-        continue;
-      }
-
-      // Source chain for this leg is Base ("BAS").
-      const transfer = await getAllbridgeTransferStatus(
-        sdk,
-        "BAS",
-        record.bridgeTxHash,
-      );
-
-      if (transfer.status === "completed") {
-        await updateOnrampOrder(orderId, {
-          status: "delivered",
-          stellarTxHash: transfer.txHash,
-        });
-        await removePendingBridge(orderId);
-        delivered++;
-        void notify(
-          `Onramp <code>${orderId}</code> delivered to Stellar ✓` +
-            (record.baseUsdcAmount ? ` (${record.baseUsdcAmount} USDC)` : ""),
-          "success",
-        );
-        continue;
-      }
-
-      if (transfer.status === "failed") {
-        // Bridge reported failure — hold and escalate; do not auto-retry.
-        await updateOnrampOrder(orderId, {
-          status: "bridge_failed",
-          failureReason: "Allbridge reported transfer failed",
-        });
-        await removePendingBridge(orderId);
-        await alertManualAction({
-          title: "Onramp bridge failed on-chain",
-          orderId,
-          amount: record.baseUsdcAmount,
-          currency: "USDC",
-          stellarAddress: record.userStellarAddress,
-          reason: `Allbridge transfer ${record.bridgeTxHash} failed.`,
-        });
-        continue;
-      }
-
-      // Still in flight. Escalate once if it's been stuck too long, but keep
-      // watching (don't remove from the set).
-      stillPending++;
-      const startedAt = record.bridgeStartedAt ?? record.updatedAt;
-      if (now - startedAt > STALE_MS && !record.staleAlerted) {
-        await updateOnrampOrder(orderId, { staleAlerted: true });
-        void alertManualAction({
-          title: "Onramp bridge slow to confirm",
-          orderId,
-          amount: record.baseUsdcAmount,
-          currency: "USDC",
-          stellarAddress: record.userStellarAddress,
-          reason:
-            `Bridge ${record.bridgeTxHash} still not confirmed after ` +
-            `${Math.round((now - startedAt) / 60000)} min.`,
-        });
-      }
+      const outcome = await finalizeOnrampOrder(sdk, orderId);
+      if (outcome === "delivered") delivered++;
+      else if (outcome === "pending") stillPending++;
     } catch {
       // Transient error on one order shouldn't stop the sweep.
       stillPending++;

@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/cron/finalize-onramp",
-      "schedule": "*/2 * * * *"
+      "schedule": "17 3 * * *"
     }
   ]
 }
