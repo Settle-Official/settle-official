@@ -21,10 +21,14 @@ export type BridgeStatus =
 
 export type PayoutStatus =
   | "pending"
+  | "deposited"
   | "validated"
+  | "settling"
   | "settled"
+  | "refunding"
   | "refunded"
-  | "expired";
+  | "expired"
+  | "unknown";
 
 export interface TokenInfo {
   symbol: string;
