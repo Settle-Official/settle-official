@@ -5,7 +5,8 @@ import { setPayoutStatus } from "@/lib/offramp/payout-store";
 import type { PayoutStatus, OnrampStatus } from "@/lib/offramp/types";
 import { updateOnrampOrder } from "@/lib/onramp/onramp-store";
 import { handleOnrampSettled } from "@/lib/onramp/handle-settlement";
-import { notify } from "@/lib/notify/telegram";
+import { notify, alertOfframpEvent } from "@/lib/notify/telegram";
+import { getOrderMeta } from "@/lib/offramp/order-meta-store";
 
 // Needs Node's crypto and the raw request body; keep off the edge runtime.
 export const runtime = "nodejs";
@@ -73,6 +74,14 @@ export async function POST(request: NextRequest) {
       };
     };
 
+    // Confirmation ping: every verified delivery lands here. Lets you see in
+    // Telegram that webhooks are actually reaching the deployment.
+    void notify(
+      `📥 Webhook received: <code>${event ?? "?"}</code>` +
+        ` · ${data?.direction ?? "offramp"} · order <code>${data?.id ?? "?"}</code>`,
+      "info",
+    );
+
     const orderId = data?.id;
     if (!orderId) {
       // Verified but unusable — ack so Paycrest doesn't retry a malformed one.
@@ -118,15 +127,22 @@ export async function POST(request: NextRequest) {
       event,
     });
 
-    if (status === "settled") {
-      void notify(
-        `Offramp <code>${orderId}</code> settled to bank` +
-          (data?.amount ? ` (${data.amount})` : ""),
-        "success",
-      );
-    } else if (status === "refunded" || status === "expired") {
-      void notify(`Offramp <code>${orderId}</code> ${status}`, "warning");
-    }
+    // Rich alert on EVERY status change, enriched with the bank details / rate
+    // / payout value captured at order creation (the webhook payload lacks
+    // them). Fires regardless of status — success, fail, or intermediate.
+    const meta = await getOrderMeta(orderId);
+    void alertOfframpEvent({
+      orderId,
+      status,
+      accountName: meta?.accountName,
+      accountNumber: meta?.accountIdentifier,
+      bank: meta?.institution,
+      currency: meta?.currency,
+      amountUsdc: meta?.amountUsdc ?? data?.amount,
+      rate: meta?.rate,
+      payoutValue: meta?.payoutValue,
+      reference: meta?.reference,
+    });
 
     // 2xx quickly so Paycrest marks the delivery successful.
     return NextResponse.json({ success: true });
