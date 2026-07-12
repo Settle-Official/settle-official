@@ -80,6 +80,53 @@ export async function alertManualAction(details: {
   return notify(lines.join("\n"), "critical");
 }
 
+/**
+ * Rich per-transaction offramp alert. Sent at order creation (status "created")
+ * and on every webhook status change, so you get one message per event with the
+ * full picture: bank details, amount, rate, payout value, and status.
+ */
+export async function alertOfframpEvent(details: {
+  orderId: string;
+  status: string; // e.g. "created", "pending", "settled", "refunded"
+  accountName?: string;
+  accountNumber?: string;
+  bank?: string;
+  currency?: string;
+  amountUsdc?: number | string;
+  rate?: number | string;
+  payoutValue?: number | string;
+  reference?: string;
+}): Promise<boolean> {
+  const s = (details.status || "unknown").toLowerCase();
+  const level: AlertLevel =
+    s === "settled"
+      ? "success"
+      : s === "refunded" || s === "expired"
+        ? "warning"
+        : "info";
+
+  const cur = details.currency ? ` ${escapeHtml(details.currency)}` : "";
+  const fmt = (v?: number | string) =>
+    v === undefined || v === null ? "—" : escapeHtml(String(v));
+
+  const lines = [
+    `<b>OFFRAMP · ${escapeHtml(s.toUpperCase())}</b>`,
+    `Order: <code>${escapeHtml(details.orderId)}</code>`,
+    details.accountName && `Name: ${escapeHtml(details.accountName)}`,
+    details.accountNumber &&
+      `Account: <code>${escapeHtml(details.accountNumber)}</code>` +
+        (details.bank ? ` (${escapeHtml(details.bank)})` : ""),
+    details.amountUsdc !== undefined &&
+      `Amount: ${fmt(details.amountUsdc)} USDC`,
+    details.rate !== undefined && `Rate: ${fmt(details.rate)}`,
+    details.payoutValue !== undefined &&
+      `Payout: ${fmt(details.payoutValue)}${cur}`,
+    `Time: ${new Date().toISOString()}`,
+  ].filter(Boolean);
+
+  return notify(lines.join("\n"), level);
+}
+
 function escapeHtml(s: string): string {
   return s
     .replace(/&/g, "&amp;")

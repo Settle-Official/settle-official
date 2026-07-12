@@ -731,27 +731,24 @@ export function StellarampDashboard() {
 
   const pollPayoutStatus = (txId: string, orderId: string) => {
     // Webhook-driven: the server persists Paycrest events to Redis and streams
-    // them here over SSE. EventSource auto-reconnects, and the stream re-reads
-    // Redis on connect, so status survives Vercel's function timeout and even a
-    // closed tab (state is restored on the next connect).
+    // them here over SSE. Resolve only on "settled"; reject ONLY on a positive
+    // failure signal ("refunded"/"expired"). A dropped stream is *unknown*, not
+    // failed — we reconnect and, as a backstop, poll the status endpoint. This
+    // avoids showing "failed" when the payout actually succeeded but the stream
+    // closed (Vercel maxDuration, network blip) before delivering "settled".
     return new Promise<void>((resolve, reject) => {
-      const source = new EventSource(`/api/offramp/stream/${orderId}`);
+      let settled = false;
+      let source: EventSource | null = null;
+      let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-      const finish = (fn: () => void) => {
-        source.close();
-        fn();
+      const cleanup = () => {
+        settled = true;
+        source?.close();
+        source = null;
+        if (pollTimer) clearInterval(pollTimer);
       };
 
-      source.onmessage = (evt) => {
-        let record: { status?: string };
-        try {
-          record = JSON.parse(evt.data);
-        } catch {
-          return;
-        }
-        const status = record.status;
-        if (!status) return;
-
+      const applyStatus = (status: string): "resolve" | "reject" | null => {
         setTradeState((prev) => ({ ...prev, payoutStatus: status }));
         TransactionStorage.update(txId, { payoutStatus: status });
         setUserTransactions(TransactionStorage.getByUser(wallet!.publicKey));
@@ -768,24 +765,73 @@ export function StellarampDashboard() {
           );
         }
 
-        // Terminal states. Only "settled" means fiat has actually landed —
-        // resolve there, not on "validated".
-        if (status === "settled") {
-          finish(resolve);
-        } else if (status === "refunded" || status === "expired") {
-          finish(() =>
-            reject(new Error(`Payout ${status} before settlement`)),
-          );
+        // Only "settled" means fiat landed. Only these two mean real failure.
+        if (status === "settled") return "resolve";
+        if (status === "refunded" || status === "expired") return "reject";
+        return null;
+      };
+
+      const connect = () => {
+        if (settled) return;
+        source = new EventSource(`/api/offramp/stream/${orderId}`);
+
+        source.onmessage = (evt) => {
+          let record: { status?: string };
+          try {
+            record = JSON.parse(evt.data);
+          } catch {
+            return;
+          }
+          if (!record.status) return;
+          const decision = applyStatus(record.status);
+          if (decision === "resolve") {
+            cleanup();
+            resolve();
+          } else if (decision === "reject") {
+            cleanup();
+            reject(new Error(`Payout ${record.status} before settlement`));
+          }
+        };
+
+        source.onerror = () => {
+          // A closed connection is NOT a failure. Close this handle; the
+          // fallback poller below keeps checking and will reconnect implicitly
+          // by continuing to read authoritative status from Redis.
+          if (source && source.readyState === EventSource.CLOSED) {
+            source.close();
+            source = null;
+            // Re-open the stream shortly, unless we've already finished.
+            if (!settled) setTimeout(connect, 3000);
+          }
+        };
+      };
+
+      // Backstop: independent of the stream, poll the Redis-backed status
+      // endpoint. This resolves/reject even if SSE never delivers the terminal
+      // event (e.g. webhook wrote it but the stream had dropped at that moment).
+      const poll = async () => {
+        if (settled) return;
+        try {
+          const res = await fetch(`/api/offramp/paycrest/order/${orderId}`);
+          if (!res.ok) return;
+          const payload = await res.json();
+          const status = (payload?.data || payload)?.status;
+          if (!status) return;
+          const decision = applyStatus(status);
+          if (decision === "resolve") {
+            cleanup();
+            resolve();
+          } else if (decision === "reject") {
+            cleanup();
+            reject(new Error(`Payout ${status} before settlement`));
+          }
+        } catch {
+          // ignore; try again next interval
         }
       };
 
-      source.onerror = () => {
-        // Transient errors trigger EventSource's built-in reconnect; only treat
-        // a fully closed connection as fatal.
-        if (source.readyState === EventSource.CLOSED) {
-          finish(() => reject(new Error("Payout status stream closed")));
-        }
-      };
+      connect();
+      pollTimer = setInterval(poll, 12000);
     });
   };
 

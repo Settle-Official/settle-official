@@ -5,7 +5,8 @@ import { setPayoutStatus } from "@/lib/offramp/payout-store";
 import type { PayoutStatus, OnrampStatus } from "@/lib/offramp/types";
 import { updateOnrampOrder } from "@/lib/onramp/onramp-store";
 import { handleOnrampSettled } from "@/lib/onramp/handle-settlement";
-import { notify } from "@/lib/notify/telegram";
+import { notify, alertOfframpEvent } from "@/lib/notify/telegram";
+import { getOrderMeta } from "@/lib/offramp/order-meta-store";
 
 // Needs Node's crypto and the raw request body; keep off the edge runtime.
 export const runtime = "nodejs";
@@ -70,8 +71,24 @@ export async function POST(request: NextRequest) {
         amount?: string;
         txHash?: string;
         direction?: string;
+        rate?: string;
+        reference?: string;
+        recipient?: {
+          institution?: string;
+          accountIdentifier?: string;
+          accountName?: string;
+          currency?: string;
+        };
       };
     };
+
+    // Confirmation ping: every verified delivery lands here. Lets you see in
+    // Telegram that webhooks are actually reaching the deployment.
+    void notify(
+      `📥 Webhook received: <code>${event ?? "?"}</code>` +
+        ` · ${data?.direction ?? "offramp"} · order <code>${data?.id ?? "?"}</code>`,
+      "info",
+    );
 
     const orderId = data?.id;
     if (!orderId) {
@@ -118,15 +135,32 @@ export async function POST(request: NextRequest) {
       event,
     });
 
-    if (status === "settled") {
-      void notify(
-        `Offramp <code>${orderId}</code> settled to bank` +
-          (data?.amount ? ` (${data.amount})` : ""),
-        "success",
-      );
-    } else if (status === "refunded" || status === "expired") {
-      void notify(`Offramp <code>${orderId}</code> ${status}`, "warning");
-    }
+    // Rich alert on EVERY status change. Prefer metadata captured at order
+    // creation; fall back to the fields Paycrest includes in the payload
+    // (rate/recipient/reference) so orders created before this deploy — or any
+    // with missing meta — still get full detail.
+    const meta = await getOrderMeta(orderId);
+    const rcpt = data?.recipient;
+    const payloadAmount = data?.amount ? Number(data.amount) : undefined;
+    const payloadRate = data?.rate ? Number(data.rate) : undefined;
+    const payoutValue =
+      meta?.payoutValue ??
+      (payloadAmount !== undefined && payloadRate !== undefined
+        ? Number((payloadAmount * payloadRate).toFixed(2))
+        : undefined);
+
+    void alertOfframpEvent({
+      orderId,
+      status,
+      accountName: meta?.accountName ?? rcpt?.accountName,
+      accountNumber: meta?.accountIdentifier ?? rcpt?.accountIdentifier,
+      bank: meta?.institution ?? rcpt?.institution,
+      currency: meta?.currency ?? rcpt?.currency,
+      amountUsdc: meta?.amountUsdc ?? data?.amount,
+      rate: meta?.rate ?? payloadRate,
+      payoutValue,
+      reference: meta?.reference ?? data?.reference,
+    });
 
     // 2xx quickly so Paycrest marks the delivery successful.
     return NextResponse.json({ success: true });
