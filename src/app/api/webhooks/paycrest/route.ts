@@ -71,6 +71,14 @@ export async function POST(request: NextRequest) {
         amount?: string;
         txHash?: string;
         direction?: string;
+        rate?: string;
+        reference?: string;
+        recipient?: {
+          institution?: string;
+          accountIdentifier?: string;
+          accountName?: string;
+          currency?: string;
+        };
       };
     };
 
@@ -127,21 +135,31 @@ export async function POST(request: NextRequest) {
       event,
     });
 
-    // Rich alert on EVERY status change, enriched with the bank details / rate
-    // / payout value captured at order creation (the webhook payload lacks
-    // them). Fires regardless of status — success, fail, or intermediate.
+    // Rich alert on EVERY status change. Prefer metadata captured at order
+    // creation; fall back to the fields Paycrest includes in the payload
+    // (rate/recipient/reference) so orders created before this deploy — or any
+    // with missing meta — still get full detail.
     const meta = await getOrderMeta(orderId);
+    const rcpt = data?.recipient;
+    const payloadAmount = data?.amount ? Number(data.amount) : undefined;
+    const payloadRate = data?.rate ? Number(data.rate) : undefined;
+    const payoutValue =
+      meta?.payoutValue ??
+      (payloadAmount !== undefined && payloadRate !== undefined
+        ? Number((payloadAmount * payloadRate).toFixed(2))
+        : undefined);
+
     void alertOfframpEvent({
       orderId,
       status,
-      accountName: meta?.accountName,
-      accountNumber: meta?.accountIdentifier,
-      bank: meta?.institution,
-      currency: meta?.currency,
+      accountName: meta?.accountName ?? rcpt?.accountName,
+      accountNumber: meta?.accountIdentifier ?? rcpt?.accountIdentifier,
+      bank: meta?.institution ?? rcpt?.institution,
+      currency: meta?.currency ?? rcpt?.currency,
       amountUsdc: meta?.amountUsdc ?? data?.amount,
-      rate: meta?.rate,
-      payoutValue: meta?.payoutValue,
-      reference: meta?.reference,
+      rate: meta?.rate ?? payloadRate,
+      payoutValue,
+      reference: meta?.reference ?? data?.reference,
     });
 
     // 2xx quickly so Paycrest marks the delivery successful.
