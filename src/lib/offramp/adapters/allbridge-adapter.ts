@@ -168,35 +168,30 @@ export async function getAllbridgeTransferStatus(
   try {
     const transferStatus = await sdk.getTransferStatus(chainSymbol, txHash);
 
-    // Map Allbridge status to our BridgeStatus
+    // The SDK's TransferStatusResponse has no top-level `status` string field
+    // (there never has been one — see TransferStatusResponse in
+    // @allbridge/bridge-core-sdk's core-api.model.d.ts). It was never
+    // `undefined?.toLowerCase()` crashing; the optional chaining just made
+    // this silently fall through to "pending" on every call, no matter how
+    // long ago the transfer actually completed. Derive status from the
+    // `receive` leg instead: it only appears once the destination-chain tx
+    // exists, and is done once its confirmations reach confirmationsNeeded.
+    const receive = transferStatus.receive;
     let status: BridgeStatus;
-    
-    // Allbridge statuses: pending, processing, completed, failed
-    switch (transferStatus.status?.toLowerCase()) {
-      case "completed":
-      case "success":
-        status = "completed";
-        break;
-      case "failed":
-      case "error":
-        status = "failed";
-        break;
-      case "processing":
-      case "in_progress":
-        status = "processing";
-        break;
-      case "pending":
-      case "waiting":
-        status = "pending";
-        break;
-      default:
-        status = "pending";
+    if (transferStatus.isSuspended || transferStatus.send?.isSuspended) {
+      status = "failed";
+    } else if (receive && receive.confirmations >= receive.confirmationsNeeded) {
+      status = "completed";
+    } else if (receive) {
+      status = "processing";
+    } else {
+      status = "pending";
     }
 
     return {
       status,
-      txHash: transferStatus.txHash || txHash,
-      receiveAmount: transferStatus.receiveAmount,
+      txHash: receive?.txId || txHash,
+      receiveAmount: receive?.amountFormatted?.toString(),
     };
   } catch (error: any) {
         // If we can't get status, assume it's still pending

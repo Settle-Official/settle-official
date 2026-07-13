@@ -17,6 +17,19 @@ const ICON: Record<AlertLevel, string> = {
   critical: "🚨",
 };
 
+interface InlineKeyboardMarkup {
+  inline_keyboard: { text: string; callback_data: string }[][];
+}
+
+/** Attach this to any onramp alert to let the chat re-check that order on demand. */
+export function statusButton(orderId: string): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [{ text: "🔄 Check status", callback_data: `status:${orderId}` }],
+    ],
+  };
+}
+
 /**
  * Send a Telegram message. Returns true if delivered, false otherwise.
  * Silently no-ops (returns false) when env is unconfigured so local/dev runs
@@ -25,6 +38,7 @@ const ICON: Record<AlertLevel, string> = {
 export async function notify(
   message: string,
   level: AlertLevel = "info",
+  replyMarkup?: InlineKeyboardMarkup,
 ): Promise<boolean> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
@@ -45,6 +59,7 @@ export async function notify(
           text: `${ICON[level]} ${message}`,
           parse_mode: "HTML",
           disable_web_page_preview: true,
+          ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
         }),
       },
     );
@@ -52,6 +67,30 @@ export async function notify(
   } catch {
     // Best-effort: never let a notification failure propagate.
     return false;
+  }
+}
+
+/**
+ * Dismiss a Telegram inline-button loading spinner. `text`, if given, shows
+ * as a brief toast to the tapper instead of a chat message.
+ */
+export async function answerCallbackQuery(
+  callbackQueryId: string,
+  text?: string,
+): Promise<void> {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        callback_query_id: callbackQueryId,
+        ...(text ? { text } : {}),
+      }),
+    });
+  } catch {
+    // Best-effort.
   }
 }
 
@@ -77,7 +116,9 @@ export async function alertManualAction(details: {
     details.reason && `Reason: ${escapeHtml(details.reason)}`,
   ].filter(Boolean);
 
-  return notify(lines.join("\n"), "critical");
+  // Always onramp-only (offramp has no held-funds/manual-review state), so a
+  // status re-check always makes sense here.
+  return notify(lines.join("\n"), "critical", statusButton(details.orderId));
 }
 
 /**
@@ -146,7 +187,12 @@ export async function alertRampEvent(details: {
     `Time: ${new Date().toISOString()}`,
   ].filter(Boolean);
 
-  return notify(lines.join("\n"), level);
+  // Onramp has a bridging step whose completion isn't always caught right
+  // away (open-tab SSE or a once-daily cron), so give a way to check now.
+  const markup =
+    details.direction === "onramp" ? statusButton(details.orderId) : undefined;
+
+  return notify(lines.join("\n"), level, markup);
 }
 
 /**
