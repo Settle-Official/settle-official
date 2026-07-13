@@ -5,10 +5,17 @@
  * or an open SSE tab; finalizeOnrampOrder already fires the delivered/failed
  * alert itself when it flips state, so this only needs to summarize the
  * outcome for the "still pending" and "already terminal" cases.
+ *
+ * If the order is `bridge_failed`, this actually retries the bridge (via
+ * retryOnrampBridge) instead of just re-reporting the frozen failureReason
+ * from whenever it originally failed — otherwise tapping "Check status"
+ * after fixing the underlying issue (e.g. funding hot-wallet gas) would
+ * forever echo the same stale error.
  */
 
 import { getOnrampOrder } from "./onramp-store";
 import { finalizeOnrampOrder } from "./finalize";
+import { retryOnrampBridge } from "./retry-bridge";
 import { initializeAllbridgeSdk } from "@/lib/offramp/adapters/allbridge-adapter";
 
 export interface StatusCheckResult {
@@ -45,6 +52,13 @@ export async function checkOnrampStatus(
       message: `Order ${orderId} is still bridging — not yet confirmed on Stellar.`,
       level: "info",
     };
+  }
+
+  if (record.status === "bridge_failed") {
+    // handleOnrampSettled (called inside retryOnrampBridge) already sends
+    // its own success/failure alert, so this is always toast-only.
+    const result = await retryOnrampBridge(orderId);
+    return { message: result.message, level: result.ok ? "success" : "warning", alreadyAlerted: true };
   }
 
   const suffix = record.stellarTxHash ? ` (tx ${record.stellarTxHash})` : "";

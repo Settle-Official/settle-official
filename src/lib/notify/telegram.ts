@@ -21,12 +21,20 @@ interface InlineKeyboardMarkup {
   inline_keyboard: { text: string; callback_data: string }[][];
 }
 
-/** Attach this to any onramp alert to let the chat re-check that order on demand. */
-export function statusButton(orderId: string): InlineKeyboardMarkup {
+/**
+ * Attach this to any onramp alert to let the chat act on that order on
+ * demand. The label is just wording — the callback handler (checkOnrampStatus)
+ * already branches on the order's actual current status: re-checks Allbridge
+ * if still bridging, retries the bridge if bridge_failed, or just reports
+ * status otherwise. Same button, same handler; only the text changes to
+ * match what it'll actually do in context.
+ */
+export function statusButton(
+  orderId: string,
+  label = "🔄 Check status",
+): InlineKeyboardMarkup {
   return {
-    inline_keyboard: [
-      [{ text: "🔄 Check status", callback_data: `status:${orderId}` }],
-    ],
+    inline_keyboard: [[{ text: label, callback_data: `status:${orderId}` }]],
   };
 }
 
@@ -116,9 +124,15 @@ export async function alertManualAction(details: {
     details.reason && `Reason: ${escapeHtml(details.reason)}`,
   ].filter(Boolean);
 
-  // Always onramp-only (offramp has no held-funds/manual-review state), so a
-  // status re-check always makes sense here.
-  return notify(lines.join("\n"), "critical", statusButton(details.orderId));
+  // Always onramp-only (offramp has no held-funds/manual-review state).
+  // Most manual-action alerts are a bridge_failed order sitting on held
+  // funds, where tapping this actually retries the bridge — label it as
+  // such rather than the more ambiguous "check status".
+  return notify(
+    lines.join("\n"),
+    "critical",
+    statusButton(details.orderId, "🔁 Retry bridge"),
+  );
 }
 
 /**
