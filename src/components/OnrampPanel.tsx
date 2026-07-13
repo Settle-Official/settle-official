@@ -40,6 +40,10 @@ export interface OnrampPanelProps {
   readonly isConnecting: boolean;
   readonly walletAddress?: string;
   readonly onConnect: () => void;
+  /** Fired once delivery is confirmed — a signal to refresh platform stats,
+   * not a write trigger. The write itself happens server-side in
+   * finalizeOnrampOrder, regardless of what detected the delivery. */
+  readonly onDelivered?: () => void;
 }
 
 // User-facing copy for each streamed onramp status.
@@ -63,6 +67,7 @@ export function OnrampPanel({
   isConnecting,
   walletAddress,
   onConnect,
+  onDelivered,
 }: Readonly<OnrampPanelProps>) {
   const [phase, setPhase] = useState<OnrampPhase>("form");
 
@@ -171,6 +176,7 @@ export function OnrampPanel({
         } else if (rec.status === "delivered") {
           setPhase("done");
           es.close();
+          onDelivered?.();
         } else if (
           rec.status === "refunded" ||
           rec.status === "expired" ||

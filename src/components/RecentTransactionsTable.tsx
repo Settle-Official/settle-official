@@ -1,19 +1,20 @@
-import type { RecentOfframpRow } from "@/types/stellaramp";
+import type { RecentTransactionRow } from "@/types/stellaramp";
+import { cn } from "@/lib/cn";
 
-export interface RecentOfframpsTableProps {
-  readonly rows: ReadonlyArray<RecentOfframpRow>;
+export interface RecentTransactionsTableProps {
+  readonly rows: ReadonlyArray<RecentTransactionRow>;
   readonly isLive?: boolean;
 }
 
-export function RecentOfframpsTable({
+export function RecentTransactionsTable({
   rows,
   isLive,
-}: Readonly<RecentOfframpsTableProps>) {
+}: Readonly<RecentTransactionsTableProps>) {
   return (
     <section className="border border-[var(--line)] bg-[#0a0a0a] p-[0.8rem]">
       <div className="mb-[0.65rem] flex items-end justify-between">
         <h2 className="m-0 font-space-grotesk font-bold text-[1.50rem]">
-          RECENT OFFRAMPS
+          RECENT TRANSACTIONS
         </h2>
         {isLive && (
           <span className="flex items-center gap-1.5 text-[0.62rem] tracking-[0.06em] text-[var(--accent)]">
@@ -25,6 +26,9 @@ export function RecentOfframpsTable({
       <table className="w-full border-collapse text-[0.72rem] max-[720px]:block max-[720px]:overflow-x-auto">
         <thead>
           <tr>
+            <th className="bg-[var(--accent)] p-[0.55rem] font-semibold font-space-grotesk text-left text-[0.7rem] text-[#0a0a0a]">
+              TYPE
+            </th>
             <th className="bg-[var(--accent)] p-[0.55rem] font-semibold font-space-grotesk text-left text-[0.7rem] text-[#0a0a0a]">
               TX HASH
             </th>
@@ -42,6 +46,18 @@ export function RecentOfframpsTable({
         <tbody>
           {rows.map((row) => (
             <tr key={row.txHash}>
+              <td className="border-t border-t-[var(--line)] p-[0.68rem_0.55rem]">
+                <span
+                  className={cn(
+                    "inline-block border px-[0.55rem] py-[0.2rem] text-[0.6rem]",
+                    row.type === "onramp"
+                      ? "border-[var(--accent)] text-[var(--accent)]"
+                      : "border-white text-white",
+                  )}
+                >
+                  {row.type === "onramp" ? "ONRAMP" : "OFFRAMP"}
+                </span>
+              </td>
               <td className="border-t border-t-[var(--line)] font-space-grotesk p-[0.68rem_0.55rem]">
                 {row.txHash}
               </td>

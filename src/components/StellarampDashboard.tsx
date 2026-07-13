@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { FormCard } from "@/components/FormCard";
 import { Header } from "@/components/Header";
 import { ProgressSteps } from "@/components/ProgressSteps";
-import { RecentOfframpsTable } from "@/components/RecentOfframpsTable";
+import { RecentTransactionsTable } from "@/components/RecentTransactionsTable";
 import { RightPanel, type PlatformStats } from "@/components/RightPanel";
 import { PlatformStatsCard } from "@/components/PlatformStatsCard";
 import { OnrampPanel } from "@/components/OnrampPanel";
@@ -149,6 +149,17 @@ export function StellarampDashboard() {
 
   // Fetch stats on mount
   useEffect(() => {
+    fetch("/api/stats")
+      .then((r) => r.json())
+      .then(setPlatformStats)
+      .catch(() => {});
+  }, []);
+
+  // The onramp completion itself is recorded server-side (finalizeOnrampOrder
+  // pushes to the live transactions feed regardless of what detected
+  // delivery — cron, SSE, or a manual retry/status check). This just
+  // refreshes the client's view of that already-written state.
+  const handleOnrampDelivered = useCallback(() => {
     fetch("/api/stats")
       .then((r) => r.json())
       .then(setPlatformStats)
@@ -643,11 +654,12 @@ export function StellarampDashboard() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             volume: completedAmount,
-            offramp: {
+            transaction: {
               txHash: shortHash,
               usdc: completedAmount.toFixed(2),
               naira: ngnAmount,
               status: "COMPLETE",
+              type: "offramp",
             },
           }),
         })
@@ -902,14 +914,15 @@ export function StellarampDashboard() {
                   isConnecting={isConnecting}
                   walletAddress={wallet?.publicKey}
                   onConnect={handleConnect}
+                  onDelivered={handleOnrampDelivered}
                 />
               </div>
               <div className="col-start-2 max-[1100px]:order-2 max-[1100px]:col-auto">
                 <PlatformStatsCard stats={platformStats} />
               </div>
               <div className="col-start-1 max-[1100px]:order-3 max-[1100px]:col-auto">
-                <RecentOfframpsTable
-                  rows={platformStats?.recentOfframps ?? []}
+                <RecentTransactionsTable
+                  rows={platformStats?.recentTransactions ?? []}
                   isLive={true}
                 />
               </div>
@@ -941,8 +954,8 @@ export function StellarampDashboard() {
                   />
                 </div>
                 <div className="col-start-1 max-[1100px]:order-3 max-[1100px]:col-auto">
-                  <RecentOfframpsTable
-                    rows={platformStats?.recentOfframps ?? []}
+                  <RecentTransactionsTable
+                    rows={platformStats?.recentTransactions ?? []}
                     isLive={true}
                   />
                 </div>

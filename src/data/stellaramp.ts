@@ -1,8 +1,8 @@
-import type { ProgressStep, RecentOfframpRow, StateVariant, WalletFlowState } from "@/types/stellaramp";
+import type { ProgressStep, RecentTransactionRow, StateVariant, WalletFlowState } from "@/types/stellaramp";
 
-export const RECENT_OFFRAMPS: ReadonlyArray<RecentOfframpRow> = [
-  { txHash: "5f90...a1c4", usdc: "500.00", naira: "₦799,000", status: "SETTLING" },
-  { txHash: "c2d7...9b3f", usdc: "250.00", naira: "₦398,925", status: "COMPLETE" },
+export const RECENT_OFFRAMPS: ReadonlyArray<RecentTransactionRow> = [
+  { txHash: "5f90...a1c4", usdc: "500.00", naira: "₦799,000", status: "SETTLING", type: "offramp" },
+  { txHash: "c2d7...9b3f", usdc: "250.00", naira: "₦398,925", status: "COMPLETE", type: "offramp" },
 ];
 
 export const SETTLEMENT_BREAKDOWN = [

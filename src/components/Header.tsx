@@ -1,3 +1,10 @@
+const ONRAMP_ANNOUNCEMENT =
+  "Onramp is now live on Settle. You can now buy Stellar USDC.";
+// Rendered many times over so each translated half always overflows the
+// viewport (even ultra-wide screens) — otherwise the loop shows a gap once
+// the short text runs out before the animation resets.
+const ANNOUNCEMENT_REPEAT = 12;
+
 export interface HeaderProps {
   readonly subtitle: string;
   readonly isConnected: boolean;
@@ -29,6 +36,19 @@ export function Header({
 
   return (
     <>
+      <div className="marquee-outer -mx-[2.6rem] max-[720px]:-mx-4 bg-[var(--accent)]">
+        {/* ANNOUNCEMENT_REPEAT copies the base 2-span/18s pace used by the
+            other marquee below; scaling duration by the same factor keeps
+            the per-pixel scroll speed identical instead of 12x faster. */}
+        <div
+          className="marquee-inner"
+          style={{ animationDuration: `${18 * ANNOUNCEMENT_REPEAT}s` }}
+        >
+          {Array.from({ length: ANNOUNCEMENT_REPEAT * 2 }).map((_, i) => (
+            <span key={i}>{ONRAMP_ANNOUNCEMENT}</span>
+          ))}
+        </div>
+      </div>
       <header className="flex items-center justify-between gap-4 max-[720px]:items-start max-[720px]:flex-col">
         <div>
           <h1 className="m-0 font-space-grotesk font-bold tracking-[-0.04em] leading-none">

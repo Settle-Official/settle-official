@@ -1,10 +1,11 @@
 export type WalletFlowState = "pre_connect" | "connecting" | "connected";
 
-export interface RecentOfframpRow {
+export interface RecentTransactionRow {
   readonly txHash: string;
   readonly usdc: string;
   readonly naira: string;
   readonly status: "SETTLING" | "COMPLETE";
+  readonly type: "onramp" | "offramp";
 }
 
 export interface ProgressStep {

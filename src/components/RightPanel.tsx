@@ -1,10 +1,10 @@
-import type { RecentOfframpRow } from "@/types/stellaramp";
+import type { RecentTransactionRow } from "@/types/stellaramp";
 import { PlatformStatsCard } from "@/components/PlatformStatsCard";
 
 export interface PlatformStats {
   totalUsers: number;
   totalVolume: number;
-  recentOfframps: RecentOfframpRow[];
+  recentTransactions: RecentTransactionRow[];
 }
 
 export interface RightPanelProps {
