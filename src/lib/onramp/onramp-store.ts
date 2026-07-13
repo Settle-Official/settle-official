@@ -28,6 +28,11 @@ export interface OnrampRecord {
   fiatAmount: string;
   currency: string;
   status: OnrampStatus;
+  // Refund account details (for alert enrichment; the webhook payload lacks them)
+  refundInstitution?: string;
+  refundAccountIdentifier?: string;
+  refundAccountName?: string;
+  rate?: number;
   baseUsdcAmount?: string; // amount that landed in the hot wallet
   bridgeTxHash?: string; // Base-side Allbridge tx
   stellarTxHash?: string; // Stellar delivery tx (if known)
@@ -138,6 +143,29 @@ export async function acquireBridgeLock(orderId: string): Promise<boolean> {
 
 export async function releaseBridgeLock(orderId: string): Promise<void> {
   await redis.del(`onramp:bridge-lock:${orderId}`);
+}
+
+/**
+ * Force a `bridge_failed` order back to `settled` so a manual retry can
+ * re-enter the bridging pipeline. Needed because updateOnrampOrder's
+ * no-regress guard otherwise blocks bridge_failed (rank 7) -> bridging
+ * (rank 6). No-op if the order isn't currently bridge_failed.
+ */
+export async function resetBridgeFailedForRetry(
+  orderId: string,
+): Promise<OnrampRecord | null> {
+  const existing = await getOnrampOrder(orderId);
+  if (!existing || existing.status !== "bridge_failed") return existing;
+
+  const reset: OnrampRecord = {
+    ...existing,
+    status: "settled",
+    failureReason: undefined,
+    staleAlerted: undefined,
+    updatedAt: Date.now(),
+  };
+  await redis.set(key(orderId), reset, { ex: TTL_SECONDS });
+  return reset;
 }
 
 // --- Pending-bridge tracking (for the finalizer cron) ----------------------

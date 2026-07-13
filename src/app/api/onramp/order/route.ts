@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { PaycrestAdapter } from "@/lib/offramp/adapters/paycrest-adapter";
 import { createOnrampOrder } from "@/lib/onramp/onramp-store";
 import { validateAddress, validateAmount } from "@/lib/offramp/utils/validation";
-import { notify } from "@/lib/notify/telegram";
+import { alertRampEvent } from "@/lib/notify/telegram";
 
 /**
  * Create an onramp order.
@@ -80,20 +80,35 @@ export async function POST(request: NextRequest) {
     });
 
     // Persist the order → user Stellar address mapping so the webhook can bridge
-    // to the right wallet later.
+    // to the right wallet later. Also stash refund-account + rate for alert
+    // enrichment (the webhook payload lacks them).
     await createOnrampOrder({
       orderId: order.id,
       userStellarAddress,
       fiatAmount,
       currency,
       status: "pending",
+      refundInstitution: refundAccount.institution,
+      refundAccountIdentifier: refundAccount.accountIdentifier,
+      refundAccountName: refundAccount.accountName,
+      ...(rate ? { rate } : {}),
     });
 
-    // Fire-and-forget; notify() never throws.
-    void notify(
-      `New onramp order <code>${order.id}</code> — ${fiatAmount} ${currency} → USDC on Stellar`,
-      "info",
-    );
+    // Guaranteed per-transaction alert — fires even if webhooks aren't wired up.
+    void alertRampEvent({
+      direction: "onramp",
+      orderId: order.id,
+      status: "created",
+      accountName: refundAccount.accountName,
+      accountNumber: refundAccount.accountIdentifier,
+      bank: refundAccount.institution,
+      currency,
+      amountIn: fiatAmount,
+      amountInUnit: currency,
+      rate,
+      payoutUnit: "USDC",
+      stellarAddress: userStellarAddress,
+    });
 
     return NextResponse.json({
       data: {
