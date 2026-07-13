@@ -81,9 +81,77 @@ export async function alertManualAction(details: {
 }
 
 /**
- * Rich per-transaction offramp alert. Sent at order creation (status "created")
- * and on every webhook status change, so you get one message per event with the
- * full picture: bank details, amount, rate, payout value, and status.
+ * Rich per-transaction alert for BOTH ramps. Sent at order creation
+ * (status "created") and on every status change, so you get one message per
+ * event with the full picture: bank details, amount, rate, payout value, and
+ * status.
+ *
+ * Offramp: amount is USDC in, payout is fiat out to the recipient bank.
+ * Onramp:  amount is fiat in, payout is USDC out to the user's Stellar wallet;
+ *          the bank shown is the user's refund account.
+ */
+export async function alertRampEvent(details: {
+  direction: "offramp" | "onramp";
+  orderId: string;
+  status: string;
+  accountName?: string;
+  accountNumber?: string;
+  bank?: string;
+  currency?: string;
+  amountIn?: number | string; // offramp: USDC; onramp: fiat
+  amountInUnit?: string; // e.g. "USDC" or the fiat code
+  rate?: number | string;
+  payoutValue?: number | string; // offramp: fiat; onramp: USDC
+  payoutUnit?: string;
+  stellarAddress?: string; // onramp: where USDC is delivered
+  reference?: string;
+}): Promise<boolean> {
+  const s = (details.status || "unknown").toLowerCase();
+  const level: AlertLevel =
+    s === "settled" || s === "delivered"
+      ? "success"
+      : s === "refunded" ||
+          s === "expired" ||
+          s === "bridge_failed" ||
+          s === "failed"
+        ? "warning"
+        : "info";
+
+  const fmt = (v?: number | string) =>
+    v === undefined || v === null ? "—" : escapeHtml(String(v));
+  const label = details.direction === "onramp" ? "ONRAMP" : "OFFRAMP";
+  const amountUnit = details.amountInUnit
+    ? ` ${escapeHtml(details.amountInUnit)}`
+    : "";
+  const payoutUnit = details.payoutUnit
+    ? ` ${escapeHtml(details.payoutUnit)}`
+    : details.currency
+      ? ` ${escapeHtml(details.currency)}`
+      : "";
+
+  const lines = [
+    `<b>${label} · ${escapeHtml(s.toUpperCase())}</b>`,
+    `Order: <code>${escapeHtml(details.orderId)}</code>`,
+    details.accountName && `Name: ${escapeHtml(details.accountName)}`,
+    details.accountNumber &&
+      `Account: <code>${escapeHtml(details.accountNumber)}</code>` +
+        (details.bank ? ` (${escapeHtml(details.bank)})` : ""),
+    details.amountIn !== undefined &&
+      `Amount: ${fmt(details.amountIn)}${amountUnit}`,
+    details.rate !== undefined && `Rate: ${fmt(details.rate)}`,
+    details.payoutValue !== undefined &&
+      `Payout: ${fmt(details.payoutValue)}${payoutUnit}`,
+    details.stellarAddress &&
+      `Stellar: <code>${escapeHtml(details.stellarAddress)}</code>`,
+    `Time: ${new Date().toISOString()}`,
+  ].filter(Boolean);
+
+  return notify(lines.join("\n"), level);
+}
+
+/**
+ * Rich per-transaction offramp alert. Thin wrapper over {@link alertRampEvent}
+ * kept for existing callers.
  */
 export async function alertOfframpEvent(details: {
   orderId: string;
@@ -97,34 +165,21 @@ export async function alertOfframpEvent(details: {
   payoutValue?: number | string;
   reference?: string;
 }): Promise<boolean> {
-  const s = (details.status || "unknown").toLowerCase();
-  const level: AlertLevel =
-    s === "settled"
-      ? "success"
-      : s === "refunded" || s === "expired"
-        ? "warning"
-        : "info";
-
-  const cur = details.currency ? ` ${escapeHtml(details.currency)}` : "";
-  const fmt = (v?: number | string) =>
-    v === undefined || v === null ? "—" : escapeHtml(String(v));
-
-  const lines = [
-    `<b>OFFRAMP · ${escapeHtml(s.toUpperCase())}</b>`,
-    `Order: <code>${escapeHtml(details.orderId)}</code>`,
-    details.accountName && `Name: ${escapeHtml(details.accountName)}`,
-    details.accountNumber &&
-      `Account: <code>${escapeHtml(details.accountNumber)}</code>` +
-        (details.bank ? ` (${escapeHtml(details.bank)})` : ""),
-    details.amountUsdc !== undefined &&
-      `Amount: ${fmt(details.amountUsdc)} USDC`,
-    details.rate !== undefined && `Rate: ${fmt(details.rate)}`,
-    details.payoutValue !== undefined &&
-      `Payout: ${fmt(details.payoutValue)}${cur}`,
-    `Time: ${new Date().toISOString()}`,
-  ].filter(Boolean);
-
-  return notify(lines.join("\n"), level);
+  return alertRampEvent({
+    direction: "offramp",
+    orderId: details.orderId,
+    status: details.status,
+    accountName: details.accountName,
+    accountNumber: details.accountNumber,
+    bank: details.bank,
+    currency: details.currency,
+    amountIn: details.amountUsdc,
+    amountInUnit: "USDC",
+    rate: details.rate,
+    payoutValue: details.payoutValue,
+    payoutUnit: details.currency,
+    reference: details.reference,
+  });
 }
 
 function escapeHtml(s: string): string {

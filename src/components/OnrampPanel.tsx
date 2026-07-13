@@ -25,7 +25,15 @@ interface ProviderAccount {
   validUntil: string;
 }
 
-type OnrampPhase = "form" | "awaiting-deposit" | "processing" | "done" | "error";
+type OnrampPhase =
+  | "form"
+  | "awaiting-deposit"
+  | "processing"
+  | "done"
+  | "error";
+
+const isValidStellarAddress = (address: string) =>
+  /^G[A-Z0-9]{55}$/.test(address);
 
 export interface OnrampPanelProps {
   readonly isConnected: boolean;
@@ -69,6 +77,8 @@ export function OnrampPanel({
   const [accountNumber, setAccountNumber] = useState("");
   const [accountName, setAccountName] = useState("");
   const [isVerifying, setIsVerifying] = useState(false);
+  const [useCustomAddress, setUseCustomAddress] = useState(false);
+  const [customAddress, setCustomAddress] = useState("");
 
   // Order state
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -181,6 +191,10 @@ export function OnrampPanel({
     };
   }, [orderId]);
 
+  const destinationAddress = useCustomAddress
+    ? customAddress.trim()
+    : walletAddress;
+
   const canSubmit =
     isConnected &&
     !isSubmitting &&
@@ -188,14 +202,16 @@ export function OnrampPanel({
     !!currency &&
     !!bank &&
     accountNumber.length === 10 &&
-    !!accountName;
+    !!accountName &&
+    !!destinationAddress &&
+    (!useCustomAddress || isValidStellarAddress(customAddress.trim()));
 
   const handleSubmit = async () => {
     if (!isConnected) {
       onConnect();
       return;
     }
-    if (!canSubmit || !walletAddress) return;
+    if (!canSubmit || !destinationAddress) return;
 
     setIsSubmitting(true);
     setError(null);
@@ -206,7 +222,7 @@ export function OnrampPanel({
         body: JSON.stringify({
           fiatAmount: amount,
           currency,
-          userStellarAddress: walletAddress,
+          userStellarAddress: destinationAddress,
           refundAccount: {
             institution: bank,
             accountIdentifier: accountNumber,
@@ -241,6 +257,8 @@ export function OnrampPanel({
     setAccountNumber("");
     setBank("");
     setAccountName("");
+    setUseCustomAddress(false);
+    setCustomAddress("");
   };
 
   // --- Render ---------------------------------------------------------------
@@ -257,12 +275,7 @@ export function OnrampPanel({
 
   if (phase === "processing" || phase === "done" || phase === "error") {
     return (
-      <StatusView
-        status={status}
-        phase={phase}
-        error={error}
-        onReset={reset}
-      />
+      <StatusView status={status} phase={phase} error={error} onReset={reset} />
     );
   }
 
@@ -324,14 +337,46 @@ export function OnrampPanel({
           accent={!!accountName}
         />
         <p className="m-0 text-[0.68rem] text-[var(--muted)]">
-          Refund details are used only if the order can’t be fulfilled. USDC is
-          delivered to your connected Stellar wallet.
+          Refund details are used only if the order can’t be fulfilled.
         </p>
       </div>
 
-      {error && (
-        <p className="m-0 text-[0.8rem] text-red-400">{error}</p>
-      )}
+      <div className="flex flex-col gap-[0.6rem]">
+        <div className="border border-[var(--line)] bg-[#111] px-3 py-2">
+          <p className="m-0 text-[1rem] text-[var(--accent)]">
+            By default, USDC is sent to your{" "}
+            <span className="text-[var(--foreground)]">connected wallet</span>{" "}
+            address. Tick the box below to send it to a different Stellar
+            address instead.
+          </p>
+        </div>
+        <label className="flex items-center gap-[0.5rem] text-[1rem] text-[var(--muted)]">
+          <input
+            type="checkbox"
+            checked={useCustomAddress}
+            onChange={(e) => setUseCustomAddress(e.target.checked)}
+            className="h-[14px] w-[14px] accent-[var(--accent)]"
+          />
+          Send to a different Stellar address
+        </label>
+        {useCustomAddress && (
+          <LabeledInput
+            label="DESTINATION STELLAR ADDRESS"
+            value={customAddress}
+            onChange={setCustomAddress}
+            placeholder="G..."
+          />
+        )}
+        {useCustomAddress &&
+          customAddress.trim().length > 0 &&
+          !isValidStellarAddress(customAddress.trim()) && (
+            <p className="m-0 text-[0.7rem] text-red-400">
+              Enter a valid Stellar address (starts with G, 56 characters).
+            </p>
+          )}
+      </div>
+
+      {error && <p className="m-0 text-[0.8rem] text-red-400">{error}</p>}
 
       <button
         type="button"
@@ -339,9 +384,14 @@ export function OnrampPanel({
         disabled={isConnected ? !canSubmit : isConnecting}
         className={cn(
           "h-12 font-bold uppercase tracking-[0.08em] transition-colors",
-          !isConnected && "bg-[var(--accent)] text-[#0a0a0a] hover:brightness-110",
-          isConnected && !canSubmit && "bg-[#2f2f2f] text-[var(--muted)] cursor-not-allowed",
-          isConnected && canSubmit && "bg-[#efefef] text-[#0a0a0a] hover:brightness-95",
+          !isConnected &&
+            "bg-[var(--accent)] text-[#0a0a0a] hover:brightness-110",
+          isConnected &&
+            !canSubmit &&
+            "bg-[#2f2f2f] text-[var(--muted)] cursor-not-allowed",
+          isConnected &&
+            canSubmit &&
+            "bg-[#efefef] text-[#0a0a0a] hover:brightness-95",
         )}
       >
         {!isConnected
@@ -607,7 +657,11 @@ function LabeledSelect({
             {isLoading ? "Loading…" : "Select"}
           </option>
           {options.map((o) => (
-            <option key={o.code} value={o.code} className="bg-[#0a0a0a] text-white">
+            <option
+              key={o.code}
+              value={o.code}
+              className="bg-[#0a0a0a] text-white"
+            >
               {o.name}
             </option>
           ))}

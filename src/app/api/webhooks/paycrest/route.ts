@@ -3,9 +3,9 @@ import { createHmac, timingSafeEqual } from "crypto";
 import { mapPaycrestStatus } from "@/lib/offramp/adapters/paycrest-adapter";
 import { setPayoutStatus } from "@/lib/offramp/payout-store";
 import type { PayoutStatus, OnrampStatus } from "@/lib/offramp/types";
-import { updateOnrampOrder } from "@/lib/onramp/onramp-store";
+import { updateOnrampOrder, getOnrampOrder } from "@/lib/onramp/onramp-store";
 import { handleOnrampSettled } from "@/lib/onramp/handle-settlement";
-import { notify, alertOfframpEvent } from "@/lib/notify/telegram";
+import { notify, alertOfframpEvent, alertRampEvent } from "@/lib/notify/telegram";
 import { getOrderMeta } from "@/lib/offramp/order-meta-store";
 
 // Needs Node's crypto and the raw request body; keep off the edge runtime.
@@ -70,7 +70,6 @@ export async function POST(request: NextRequest) {
         status?: string;
         amount?: string;
         txHash?: string;
-        direction?: string;
         rate?: string;
         reference?: string;
         recipient?: {
@@ -82,19 +81,27 @@ export async function POST(request: NextRequest) {
       };
     };
 
-    // Confirmation ping: every verified delivery lands here. Lets you see in
-    // Telegram that webhooks are actually reaching the deployment.
-    void notify(
-      `📥 Webhook received: <code>${event ?? "?"}</code>` +
-        ` · ${data?.direction ?? "offramp"} · order <code>${data?.id ?? "?"}</code>`,
-      "info",
-    );
-
     const orderId = data?.id;
     if (!orderId) {
       // Verified but unusable — ack so Paycrest doesn't retry a malformed one.
       return NextResponse.json({ success: true, ignored: true });
     }
+
+    // Route by direction. Paycrest's real webhook payload has no `direction`
+    // field (despite the type below) — it's never populated, so relying on it
+    // silently misroutes every onramp event into the offramp path below,
+    // which never triggers the Base→Stellar bridge. Look up which store the
+    // order actually lives in instead; that's the source of truth since we
+    // wrote it ourselves at order-creation time.
+    const onrampRecord = await getOnrampOrder(orderId);
+
+    // Confirmation ping: every verified delivery lands here. Lets you see in
+    // Telegram that webhooks are actually reaching the deployment.
+    void notify(
+      `📥 Webhook received: <code>${event ?? "?"}</code>` +
+        ` · ${onrampRecord ? "onramp" : "offramp"} · order <code>${orderId}</code>`,
+      "info",
+    );
 
     // Prefer the bare status from the v2 payload; fall back to mapping the
     // event name when it's missing or unrecognised.
@@ -104,24 +111,38 @@ export async function POST(request: NextRequest) {
         ? (rawStatus as PayoutStatus)
         : mapPaycrestStatus(event ?? "");
 
-    // Route by direction. Onramp needs the custodial Base→Stellar bridge; the
-    // existing offramp path just persists status for the client SSE stream.
-    if (data?.direction === "onramp") {
+    // Onramp needs the custodial Base→Stellar bridge; the existing offramp
+    // path just persists status for the client SSE stream.
+    if (onrampRecord) {
       await updateOnrampOrder(orderId, {
         status: status as OnrampStatus,
         ...(data?.amount ? { baseUsdcAmount: data.amount } : {}),
+      });
+
+      // Rich alert on every onramp status change, enriched from the stored
+      // record (refund account, rate) which the webhook payload lacks.
+      const rec = await getOnrampOrder(orderId);
+      void alertRampEvent({
+        direction: "onramp",
+        orderId,
+        status,
+        accountName: rec?.refundAccountName ?? data?.recipient?.accountName,
+        accountNumber:
+          rec?.refundAccountIdentifier ?? data?.recipient?.accountIdentifier,
+        bank: rec?.refundInstitution ?? data?.recipient?.institution,
+        currency: rec?.currency ?? data?.recipient?.currency,
+        amountIn: rec?.fiatAmount,
+        amountInUnit: rec?.currency,
+        rate: rec?.rate ?? (data?.rate ? Number(data.rate) : undefined),
+        payoutValue: data?.amount, // USDC delivered
+        payoutUnit: "USDC",
+        stellarAddress: rec?.userStellarAddress,
       });
 
       if (status === "settled") {
         // Bridge inline. handleOnrampSettled is lock-guarded and hold-and-alert
         // on failure, so it's safe under Paycrest's retries.
         await handleOnrampSettled(orderId, data?.amount);
-      } else if (status === "refunded" || status === "expired") {
-        void notify(
-          `Onramp <code>${orderId}</code> ${status}` +
-            (data?.amount ? ` (${data.amount})` : ""),
-          "warning",
-        );
       }
 
       return NextResponse.json({ success: true });
