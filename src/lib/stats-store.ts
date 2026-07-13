@@ -12,14 +12,15 @@ const KEYS = {
   users: "stellaramp:total_users",
   volume: "stellaramp:total_volume",
   wallets: "stellaramp:known_wallets",
-  recentOfframps: "stellaramp:recent_offramps",
+  recentTransactions: "stellaramp:recent_transactions",
 };
 
-export interface RecentOfframpEntry {
+export interface RecentTransactionEntry {
   txHash: string;
   usdc: string;
   naira: string;
   status: "SETTLING" | "COMPLETE";
+  type: "onramp" | "offramp";
 }
 
 /**
@@ -39,17 +40,17 @@ async function getNumber(key: string, fallback = 0): Promise<number> {
 export async function getStats(): Promise<{
   totalUsers: number;
   totalVolume: number;
-  recentOfframps: RecentOfframpEntry[];
+  recentTransactions: RecentTransactionEntry[];
 }> {
-  const [users, volume, offramps] = await Promise.all([
+  const [users, volume, transactions] = await Promise.all([
     getNumber(KEYS.users),
     getNumber(KEYS.volume),
-    redis.lrange<RecentOfframpEntry>(KEYS.recentOfframps, 0, 9),
+    redis.lrange<RecentTransactionEntry>(KEYS.recentTransactions, 0, 9),
   ]);
   return {
     totalUsers: users + SEED_USERS,
     totalVolume: volume + SEED_VOLUME,
-    recentOfframps: offramps ?? [],
+    recentTransactions: transactions ?? [],
   };
 }
 
@@ -66,7 +67,7 @@ export async function addVolume(amount: number): Promise<void> {
   await redis.incrbyfloat(KEYS.volume, amount);
 }
 
-export async function pushRecentOfframp(entry: RecentOfframpEntry): Promise<void> {
-  await redis.lpush(KEYS.recentOfframps, entry);
-  await redis.ltrim(KEYS.recentOfframps, 0, 9); // keep last 10
+export async function pushRecentTransaction(entry: RecentTransactionEntry): Promise<void> {
+  await redis.lpush(KEYS.recentTransactions, entry);
+  await redis.ltrim(KEYS.recentTransactions, 0, 9); // keep last 10
 }
