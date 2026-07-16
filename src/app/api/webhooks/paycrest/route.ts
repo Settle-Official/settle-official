@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "crypto";
 import { mapPaycrestStatus } from "@/lib/offramp/adapters/paycrest-adapter";
-import { setPayoutStatus, getPayoutStatus, isTerminal } from "@/lib/offramp/payout-store";
+import { setPayoutStatus, claimSettlementRecording } from "@/lib/offramp/payout-store";
 import type { PayoutStatus, OnrampStatus } from "@/lib/offramp/types";
 import { updateOnrampOrder, getOnrampOrder } from "@/lib/onramp/onramp-store";
 import { handleOnrampSettled } from "@/lib/onramp/handle-settlement";
@@ -158,11 +158,7 @@ export async function POST(request: NextRequest) {
     }
 
     // --- Offramp (existing behavior) ---
-    // Captured before the write below so we can tell a genuine first-time
-    // settlement apart from Paycrest retrying an already-settled webhook.
-    const priorPayout = await getPayoutStatus(orderId);
-
-    await setPayoutStatus(orderId, {
+    const payoutRecord = await setPayoutStatus(orderId, {
       status,
       amount: data?.amount,
       txHash: data?.txHash,
@@ -185,15 +181,20 @@ export async function POST(request: NextRequest) {
 
     // Record it in the live transactions feed here (not client-side) so it's
     // captured regardless of whether the user's tab was still open — mirrors
-    // the onramp fix in finalize.ts. Guarded on the prior status so a Paycrest
-    // retry of an already-settled webhook doesn't double-count volume/entries.
-    if (status === "settled" && !(priorPayout && isTerminal(priorPayout.status))) {
+    // the onramp fix in finalize.ts. Paycrest can deliver the same `settled`
+    // webhook more than once in close succession, so claim it atomically
+    // (Redis SET NX) rather than a read-then-check, which can race when two
+    // deliveries overlap and both read "not yet recorded" before either writes.
+    if (status === "settled" && (await claimSettlementRecording(orderId))) {
       const usdcAmount = meta?.amountUsdc ?? payloadAmount;
       if (usdcAmount !== undefined && Number.isFinite(usdcAmount)) {
+        // Paycrest doesn't always carry the on-chain hash on the settled
+        // event itself; payoutRecord.txHash is the merged value from
+        // whichever event first reported it. Fall back to the order id so a
+        // real identifier is always shown instead of a placeholder.
+        const displayHash = payoutRecord.txHash || orderId;
         void pushRecentTransaction({
-          txHash: data?.txHash
-            ? `${data.txHash.slice(0, 4)}...${data.txHash.slice(-4)}`
-            : "----...----",
+          txHash: `${displayHash.slice(0, 4)}...${displayHash.slice(-4)}`,
           usdc: usdcAmount.toFixed(2),
           naira: formatFiat(payoutValue, meta?.currency ?? rcpt?.currency),
           status: "COMPLETE",
