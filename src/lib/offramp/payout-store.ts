@@ -63,6 +63,11 @@ export async function getPayoutStatus(
  * Idempotent write. Paycrest retries deliveries, and they can arrive out of
  * order — never let a later event regress a record that's already terminal or
  * further along. Returns the record now in effect.
+ *
+ * Merges rather than overwrites: Paycrest doesn't repeat the on-chain txHash
+ * (or amount) on every event — it's typically only present on the event that
+ * reports the deposit. A later event that omits it would otherwise blank out
+ * an already-known value.
  */
 export async function setPayoutStatus(
   orderId: string,
@@ -79,7 +84,38 @@ export async function setPayoutStatus(
     }
   }
 
-  const record: PayoutRecord = { ...next, updatedAt: Date.now() };
+  const record: PayoutRecord = {
+    status: next.status,
+    amount: next.amount ?? existing?.amount,
+    txHash: next.txHash ?? existing?.txHash,
+    event: next.event ?? existing?.event,
+    updatedAt: Date.now(),
+  };
   await redis.set(key(orderId), record, { ex: TTL_SECONDS });
   return record;
+}
+
+const settlementRecordedKey = (orderId: string) =>
+  `paycrest:order-settlement-recorded:${orderId}`;
+
+/**
+ * Atomically claims "this order's settlement has been recorded in the
+ * transactions feed" — returns true only for the caller that wins the claim.
+ *
+ * Paycrest can deliver the same `settled` webhook more than once in close
+ * succession (its own retry, or two near-simultaneous deliveries), and a
+ * plain read-then-write check (read prior status, decide, write) isn't
+ * atomic: two overlapping requests can both read "not yet settled" before
+ * either has written, and both proceed to push a duplicate transaction. A
+ * Redis `SET NX` is atomic across concurrent requests, so only the first one
+ * to arrive ever gets `true`.
+ */
+export async function claimSettlementRecording(
+  orderId: string,
+): Promise<boolean> {
+  const result = await redis.set(settlementRecordedKey(orderId), "1", {
+    nx: true,
+    ex: TTL_SECONDS,
+  });
+  return result === "OK";
 }
