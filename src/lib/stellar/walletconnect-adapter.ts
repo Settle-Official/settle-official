@@ -25,7 +25,7 @@ async function getClient(): Promise<SignClient> {
     projectId,
     relayUrl: RELAY_URL,
     metadata: {
-      name: "Settle",
+      name: "Settu",
       description: "Stellar USDC to Naira offramp",
       url: typeof window !== "undefined" ? window.location.origin : "",
       icons: [

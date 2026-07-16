@@ -376,7 +376,7 @@ export function FormCard({
         accountIdentifier: accountNumber,
         accountName,
         currency,
-        memo: "Settle offramp",
+        memo: "Settu offramp",
       },
     });
   };
@@ -393,7 +393,7 @@ export function FormCard({
         </h2>
         <p className="mt-[0.3rem] mb-0 text-[0.75rem] text-[var(--muted)]">
           {isConnected
-            ? "Connected wallet detected. Confirm amount and settlement bank details."
+            ? "Connected wallet detected. Confirm amount and settument bank details."
             : isConnecting
               ? "Waiting for wallet signature before opening the off-ramp form."
               : "Securely connect a Stellar-compatible wallet before entering payout details."}

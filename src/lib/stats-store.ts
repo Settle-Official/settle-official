@@ -45,7 +45,7 @@ export async function getStats(): Promise<{
   const [users, volume, transactions] = await Promise.all([
     getNumber(KEYS.users),
     getNumber(KEYS.volume),
-    redis.lrange<RecentTransactionEntry>(KEYS.recentTransactions, 0, 9),
+    redis.lrange<RecentTransactionEntry>(KEYS.recentTransactions, 0, 49),
   ]);
   return {
     totalUsers: users + SEED_USERS,
@@ -69,5 +69,5 @@ export async function addVolume(amount: number): Promise<void> {
 
 export async function pushRecentTransaction(entry: RecentTransactionEntry): Promise<void> {
   await redis.lpush(KEYS.recentTransactions, entry);
-  await redis.ltrim(KEYS.recentTransactions, 0, 9); // keep last 10
+  await redis.ltrim(KEYS.recentTransactions, 0, 49); // keep last 50
 }

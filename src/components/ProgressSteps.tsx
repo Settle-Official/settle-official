@@ -20,7 +20,7 @@ export function ProgressSteps({ isConnected, isConnecting }: Readonly<ProgressSt
       title: isConnected ? "CONNECTED ✓" : "CONNECT WALLET",
       description: isConnected 
         ? "Connection successful. Proceed with transfer."
-        : "Authorize Settle from your wallet extension.",
+        : "Authorize Settu from your wallet extension.",
     },
     {
       id: "s2",
@@ -34,7 +34,7 @@ export function ProgressSteps({ isConnected, isConnecting }: Readonly<ProgressSt
       id: "s3",
       number: "03",
       title: "₦ PAYOUT",
-      description: "Settlement to your local bank account.",
+      description: "Settument to your local bank account.",
     },
   ];
 

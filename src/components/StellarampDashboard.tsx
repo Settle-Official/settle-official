@@ -395,7 +395,7 @@ export function StellarampDashboard() {
               institution: tradeData.beneficiary.institution,
               accountIdentifier: tradeData.beneficiary.accountIdentifier,
               accountName: tradeData.beneficiary.accountName,
-              memo: tradeData.beneficiary.memo || "Settle offramp",
+              memo: tradeData.beneficiary.memo || "Settu offramp",
               currency: tradeData.beneficiary.currency,
             },
             returnAddress: baseReturnAddress,
@@ -640,33 +640,14 @@ export function StellarampDashboard() {
       TransactionStorage.update(txId, { status: "completed" });
       setUserTransactions(TransactionStorage.getByUser(wallet.publicKey));
 
-      // Update platform stats with completed transaction volume + push to live feed
-      const completedAmount = parseFloat(tradeData.amount);
-      if (completedAmount > 0) {
-        const ngnAmount = pricingState.quote?.destinationAmount
-          ? `₦${parseFloat(pricingState.quote.destinationAmount).toLocaleString("en-NG", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-          : "₦--";
-        const shortHash = tradeState.stellarTxHash
-          ? `${tradeState.stellarTxHash.slice(0, 4)}...${tradeState.stellarTxHash.slice(-4)}`
-          : "----...----";
-        fetch("/api/stats", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            volume: completedAmount,
-            transaction: {
-              txHash: shortHash,
-              usdc: completedAmount.toFixed(2),
-              naira: ngnAmount,
-              status: "COMPLETE",
-              type: "offramp",
-            },
-          }),
-        })
-          .then((r) => r.json())
-          .then(setPlatformStats)
-          .catch(() => {});
-      }
+      // The offramp completion itself is now recorded server-side (the
+      // Paycrest webhook pushes to the live transactions feed + volume on
+      // `settled`, regardless of whether this tab is still open). Just
+      // refresh the client's view of that already-written state.
+      fetch("/api/stats")
+        .then((r) => r.json())
+        .then(setPlatformStats)
+        .catch(() => {});
 
       // Reset the form so the user can start a fresh offramp
       setFormResetKey((k) => k + 1);
