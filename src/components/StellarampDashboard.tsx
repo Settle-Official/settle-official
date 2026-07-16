@@ -875,11 +875,21 @@ export function StellarampDashboard() {
                   type="button"
                   onClick={() => setMode(m)}
                   aria-pressed={isActive}
-                  className={`min-w-[150px] border-4 border-[#C9A962] px-4 py-[0.6rem] text-[0.75rem] font-semibold uppercase tracking-[0.08em] rounded-none transition-colors focus:outline-none focus:ring-2 focus:ring-[#C9A962]/70 ${
-                    isActive
-                      ? "bg-[#C9A962] text-[#0a0a0a]"
-                      : "bg-[#101010] text-[#f4e1ad] hover:bg-[#C9A962] hover:text-[#0a0a0a]"
-                  }`}
+                  // Inline styles here, not bg-*/border-* utility classes: a
+                  // global unlayered `button { background: none; border: 0 }`
+                  // reset in globals.css always wins over layered Tailwind
+                  // utilities regardless of source order, which silently
+                  // dropped the active-state fill (only the focus ring showed,
+                  // vanishing on blur). Inline style has the highest
+                  // specificity, so it renders correctly without having to
+                  // touch that global reset and risk changing every other
+                  // button's look.
+                  style={{
+                    border: "4px solid #C9A962",
+                    backgroundColor: isActive ? "#C9A962" : "#101010",
+                    color: isActive ? "#0a0a0a" : "#f4e1ad",
+                  }}
+                  className="min-w-[150px] px-4 py-[0.6rem] text-[0.75rem] font-semibold uppercase tracking-[0.08em] rounded-none transition-colors focus:outline-none focus:ring-2 focus:ring-[#C9A962]/70"
                 >
                   {m === "onramp" ? "On-ramp" : "Off-ramp"}
                 </button>
