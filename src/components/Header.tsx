@@ -1,5 +1,5 @@
 const ONRAMP_ANNOUNCEMENT =
-  "Onramp is now live on Settle. You can now buy Stellar USDC.";
+  "Onramp is now live on Settu. You can now buy Stellar USDC.";
 // Rendered many times over so each translated half always overflows the
 // viewport (even ultra-wide screens) — otherwise the loop shows a gap once
 // the short text runs out before the animation resets.
@@ -53,7 +53,7 @@ export function Header({
         <div>
           <h1 className="m-0 font-space-grotesk font-bold tracking-[-0.04em] leading-none">
             <span className="text-[clamp(1.7rem,2.4vw,2.6rem)] text-[#C9A962]">$</span>
-            <span className="text-[clamp(1.7rem,2.4vw,2.6rem)]">ETTLE</span>
+            <span className="text-[clamp(1.7rem,2.4vw,2.6rem)]">ETTU</span>
           </h1>
           <p className="mt-[0.35rem] mb-0 text-[0.88rem] text-[var(--muted)]">
             {subtitle}

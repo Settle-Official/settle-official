@@ -1,5 +1,10 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import type { RecentTransactionRow } from "@/types/stellaramp";
 import { cn } from "@/lib/cn";
+
+const PAGE_SIZE = 10;
 
 export interface RecentTransactionsTableProps {
   readonly rows: ReadonlyArray<RecentTransactionRow>;
@@ -10,6 +15,17 @@ export function RecentTransactionsTable({
   rows,
   isLive,
 }: Readonly<RecentTransactionsTableProps>) {
+  const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  const [page, setPage] = useState(1);
+
+  // Rows refresh on a live interval, so clamp rather than reset — stay put
+  // unless the current page no longer exists (e.g. the list just shrank).
+  useEffect(() => {
+    setPage((current) => Math.min(current, pageCount));
+  }, [pageCount]);
+
+  const pageRows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
   return (
     <section className="border border-[var(--line)] bg-[#0a0a0a] p-[0.8rem]">
       <div className="mb-[0.65rem] flex items-end justify-between">
@@ -44,8 +60,8 @@ export function RecentTransactionsTable({
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
-            <tr key={row.txHash}>
+          {pageRows.map((row, index) => (
+            <tr key={`${row.txHash}-${index}`}>
               <td className="border-t border-t-[var(--line)] p-[0.68rem_0.55rem]">
                 <span
                   className={cn(
@@ -82,6 +98,27 @@ export function RecentTransactionsTable({
           ))}
         </tbody>
       </table>
+      <div className="mt-[0.7rem] flex items-center justify-between text-[0.68rem] text-[var(--muted)]">
+        <button
+          type="button"
+          onClick={() => setPage((current) => Math.max(1, current - 1))}
+          disabled={page === 1}
+          className="border border-[var(--line)] px-[0.6rem] py-[0.3rem] uppercase tracking-[0.06em] text-[var(--accent)] hover:border-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[var(--line)]"
+        >
+          Prev
+        </button>
+        <span>
+          Page {page} of {pageCount}
+        </span>
+        <button
+          type="button"
+          onClick={() => setPage((current) => Math.min(pageCount, current + 1))}
+          disabled={page === pageCount}
+          className="border border-[var(--line)] px-[0.6rem] py-[0.3rem] uppercase tracking-[0.06em] text-[var(--accent)] hover:border-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[var(--line)]"
+        >
+          Next
+        </button>
+      </div>
     </section>
   );
 }

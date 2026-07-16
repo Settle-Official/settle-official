@@ -1,12 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "crypto";
 import { mapPaycrestStatus } from "@/lib/offramp/adapters/paycrest-adapter";
-import { setPayoutStatus } from "@/lib/offramp/payout-store";
+import { setPayoutStatus, getPayoutStatus, isTerminal } from "@/lib/offramp/payout-store";
 import type { PayoutStatus, OnrampStatus } from "@/lib/offramp/types";
 import { updateOnrampOrder, getOnrampOrder } from "@/lib/onramp/onramp-store";
 import { handleOnrampSettled } from "@/lib/onramp/handle-settlement";
 import { notify, alertOfframpEvent, alertRampEvent } from "@/lib/notify/telegram";
 import { getOrderMeta } from "@/lib/offramp/order-meta-store";
+import { pushRecentTransaction, addVolume } from "@/lib/stats-store";
+
+function formatFiat(amount: number | undefined, currency?: string): string {
+  if (amount === undefined || !Number.isFinite(amount)) return "--";
+  const code = (currency || "NGN").toUpperCase();
+  return code === "NGN"
+    ? `₦${amount.toLocaleString("en-NG", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    : `${code} ${amount.toFixed(2)}`;
+}
 
 // Needs Node's crypto and the raw request body; keep off the edge runtime.
 export const runtime = "nodejs";
@@ -149,6 +158,10 @@ export async function POST(request: NextRequest) {
     }
 
     // --- Offramp (existing behavior) ---
+    // Captured before the write below so we can tell a genuine first-time
+    // settlement apart from Paycrest retrying an already-settled webhook.
+    const priorPayout = await getPayoutStatus(orderId);
+
     await setPayoutStatus(orderId, {
       status,
       amount: data?.amount,
@@ -169,6 +182,26 @@ export async function POST(request: NextRequest) {
       (payloadAmount !== undefined && payloadRate !== undefined
         ? Number((payloadAmount * payloadRate).toFixed(2))
         : undefined);
+
+    // Record it in the live transactions feed here (not client-side) so it's
+    // captured regardless of whether the user's tab was still open — mirrors
+    // the onramp fix in finalize.ts. Guarded on the prior status so a Paycrest
+    // retry of an already-settled webhook doesn't double-count volume/entries.
+    if (status === "settled" && !(priorPayout && isTerminal(priorPayout.status))) {
+      const usdcAmount = meta?.amountUsdc ?? payloadAmount;
+      if (usdcAmount !== undefined && Number.isFinite(usdcAmount)) {
+        void pushRecentTransaction({
+          txHash: data?.txHash
+            ? `${data.txHash.slice(0, 4)}...${data.txHash.slice(-4)}`
+            : "----...----",
+          usdc: usdcAmount.toFixed(2),
+          naira: formatFiat(payoutValue, meta?.currency ?? rcpt?.currency),
+          status: "COMPLETE",
+          type: "offramp",
+        });
+        void addVolume(usdcAmount);
+      }
+    }
 
     void alertOfframpEvent({
       orderId,

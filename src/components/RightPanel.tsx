@@ -139,7 +139,7 @@ export function RightPanel({
 
       <section className="border border-[var(--line)] bg-[#0a0a0a] p-4">
         <h3 className="mt-0 mb-[0.65rem] font-bold font-space-grotesk text-[1.13rem]">
-          SETTLEMENT BREAKDOWN
+          SETTUMENT BREAKDOWN
         </h3>
         {/* <div className="flex items-center justify-between py-[0.35rem] text-[0.72rem] text-[var(--muted)]">
           <span>FX Rate</span>
