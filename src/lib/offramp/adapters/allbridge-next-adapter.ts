@@ -42,8 +42,15 @@ export interface NextQuote {
 }
 
 export interface NextBridgeTxResult {
-  tx: string;
+  // The nested shape (not a plain string) was confirmed against a live
+  // /tx/create response: {"tx":{"contractAddress":"C...","tx":"<base64 XDR>","value":"..."}}.
+  tx: {
+    contractAddress: string;
+    tx: string;
+    value: string;
+  };
   amountOut?: string;
+  amountOutMin?: string;
   [key: string]: unknown;
 }
 
@@ -162,7 +169,7 @@ export async function createNextBridgeTx(params: {
     body: JSON.stringify(body),
   });
 
-  if (!result?.tx || typeof result.tx !== "string") {
+  if (!result?.tx?.tx || typeof result.tx.tx !== "string") {
     throw new Error("Allbridge Next /tx/create returned no usable tx payload");
   }
   return result;
