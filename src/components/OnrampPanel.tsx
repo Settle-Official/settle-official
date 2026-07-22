@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { cn } from "@/lib/cn";
+import { SelectField } from "@/components/SelectField";
 
 const PAYCREST_API_BASE = "https://api.paycrest.io/v1";
 
@@ -308,7 +309,7 @@ export function OnrampPanel({
           placeholder="0.00"
         />
         <div className="grid grid-cols-2 gap-[0.6rem] max-[720px]:grid-cols-1">
-          <LabeledSelect
+          <SelectField
             label="PAY WITH CURRENCY"
             value={currency}
             onChange={(v) => {
@@ -321,6 +322,7 @@ export function OnrampPanel({
               name: `${c.name} (${c.symbol})`,
             }))}
             isLoading={isLoadingCurrencies}
+            placeholder="Select currency"
           />
           <LabeledInput
             label="REFUND ACCOUNT NUMBER"
@@ -329,12 +331,13 @@ export function OnrampPanel({
             placeholder="0000000000"
             maxLength={10}
           />
-          <LabeledSelect
+          <SelectField
             label="REFUND BANK"
             value={bank}
             onChange={setBank}
             options={banks}
             isLoading={isLoadingBanks}
+            placeholder="Select bank"
           />
         </div>
         <ReadOnlyField
@@ -625,70 +628,6 @@ function LabeledInput({
           maxLength={maxLength}
           className="flex-1 bg-transparent text-[0.95rem] outline-none placeholder:text-[var(--muted)]"
         />
-      </div>
-    </div>
-  );
-}
-
-function LabeledSelect({
-  label,
-  value,
-  onChange,
-  options,
-  isLoading,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  options: Bank[];
-  isLoading?: boolean;
-}) {
-  return (
-    <div className="flex flex-col gap-[0.4rem]">
-      <label className="text-[0.69rem] tracking-[0.08em] text-[var(--muted)]">
-        {label}
-      </label>
-      <div className="relative h-[46px] border border-[var(--line)]">
-        <select
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          disabled={isLoading}
-          className={cn(
-            "h-full w-full appearance-none bg-transparent px-[0.8rem] text-[0.95rem] outline-none",
-            isLoading && "cursor-not-allowed opacity-50",
-            !value && "text-[var(--muted)]",
-          )}
-        >
-          <option value="" disabled>
-            {isLoading ? "Loading…" : "Select"}
-          </option>
-          {options.map((o) => (
-            <option
-              key={o.code}
-              value={o.code}
-              className="bg-[#0a0a0a] text-white"
-            >
-              {o.name}
-            </option>
-          ))}
-        </select>
-        <div className="pointer-events-none absolute right-[0.8rem] top-1/2 -translate-y-1/2">
-          <svg
-            width="12"
-            height="8"
-            viewBox="0 0 12 8"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-          >
-            <path
-              d="M1 1L6 6L11 1"
-              stroke="var(--accent)"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </div>
       </div>
     </div>
   );
