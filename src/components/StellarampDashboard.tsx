@@ -16,11 +16,6 @@ import {
   type OfframpStep,
 } from "@/components/TransactionProgressModal";
 import * as StellarSdk from "@stellar/stellar-sdk";
-import {
-  getAllbridgeQuote,
-  getAllbridgeTokens,
-  initializeAllbridgeSdk,
-} from "@/lib/offramp/adapters/allbridge-adapter";
 import { MobileWalletModal } from "@/components/MobileWalletModal";
 import { isMobileDevice, isInsideFreighterBrowser } from "@/lib/stellar/wallet-adapter";
 
@@ -341,32 +336,27 @@ export function StellarampDashboard() {
     try {
       setTradeState({ bridgeStatus: "building", payoutStatus: "pending" });
 
-      const sdk = await withTimeout(
-        initializeAllbridgeSdk(),
-        15_000,
-        "Allbridge SDK init",
-      );
-      const tokens = await withTimeout(
-        getAllbridgeTokens(sdk),
-        15_000,
-        "Fetching token info",
-      );
-      if (!tokens?.stellar?.usdc || !tokens?.base?.usdc) {
-        throw new Error("USDC tokens not found on Allbridge");
-      }
-
       // 1) Compute post-bridge amount for Paycrest order amount
-      const bridgeQuote = await withTimeout(
-        getAllbridgeQuote(
-          sdk,
-          tokens.stellar.usdc,
-          tokens.base.usdc,
-          tradeData.amount,
-        ),
+      const bridgeQuoteResponse = await withTimeout(
+        fetch("/api/offramp/bridge/quote", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ amount: tradeData.amount }),
+        }),
         15_000,
         "Bridge quote",
       );
-      const paycrestOrderAmount = Number.parseFloat(bridgeQuote.receiveAmount);
+      if (!bridgeQuoteResponse.ok) {
+        const payload = await bridgeQuoteResponse.json().catch(() => ({}));
+        throw new Error(
+          payload?.error ||
+            `Bridge quote request failed: ${bridgeQuoteResponse.status}`,
+        );
+      }
+      const bridgeQuotePayload = await bridgeQuoteResponse.json();
+      const paycrestOrderAmount = Number.parseFloat(
+        bridgeQuotePayload?.receiveAmount,
+      );
       if (!Number.isFinite(paycrestOrderAmount) || paycrestOrderAmount <= 0) {
         throw new Error("Invalid bridge receive amount for payout order");
       }
