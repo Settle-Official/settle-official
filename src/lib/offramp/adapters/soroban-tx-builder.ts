@@ -209,6 +209,89 @@ export async function buildSwapAndBridgeTx(params: {
 }
 
 /**
+ * Take an unsigned, unsimulated transaction XDR built by an external service
+ * that has no access to our Soroban RPC (e.g. Allbridge Next's /tx/create,
+ * which returns a bare invokeHostFunction skeleton with no
+ * SorobanTransactionData, a placeholder fee, and no real sequence number) and
+ * re-simulate + assemble it against our own RPC so it carries valid resource
+ * data and a real fee before being handed to the user's wallet for signing.
+ *
+ * Necessary because a transaction with a Soroban operation but no
+ * SorobanTransactionData extension is structurally invalid — Stellar Core
+ * rejects it outright as txMalformed, before signatures or sequence numbers
+ * are even checked.
+ */
+export async function simulateAndAssembleTx(params: {
+  unsignedXdr: string;
+  sourceAddress: string;
+}): Promise<string> {
+  const { unsignedXdr, sourceAddress } = params;
+
+  const rpcServer = new StellarSdk.rpc.Server(SOROBAN_RPC_URL);
+  const sourceAccount = await rpcServer.getAccount(sourceAddress);
+
+  // Work at the raw XDR level (not TransactionBuilder.fromXDR's friendly
+  // parsed shape) because TransactionBuilder.addOperation expects the raw
+  // xdr.Operation the Operation.xyz() builders produce, not the
+  // human-readable {type, func, auth} shape Transaction.operations exposes.
+  const envelope = StellarSdk.xdr.TransactionEnvelope.fromXDR(
+    unsignedXdr,
+    "base64",
+  );
+  if (envelope.switch().name !== "envelopeTypeTx") {
+    throw new Error(
+      "Cannot simulate a fee-bump transaction — expected a standard transaction",
+    );
+  }
+  const operation = envelope.v1().tx().operations()[0];
+  if (!operation) {
+    throw new Error("Transaction to simulate has no operations");
+  }
+
+  const tx = new StellarSdk.TransactionBuilder(sourceAccount, {
+    fee: StellarSdk.BASE_FEE,
+    networkPassphrase: NETWORK_PASSPHRASE,
+  })
+    .addOperation(operation)
+    .setTimeout(SEND_TX_TIMEOUT_SEC)
+    .build();
+
+  const simResult = await rpcServer.simulateTransaction(tx);
+  if (StellarSdk.rpc.Api.isSimulationError(simResult)) {
+    throw new Error(
+      `Simulation failed: ${(simResult as any).error || JSON.stringify(simResult)}`,
+    );
+  }
+  const simSuccess =
+    simResult as StellarSdk.rpc.Api.SimulateTransactionSuccessResponse;
+
+  // Extend Soroban auth entry expiration so the user has time to review and
+  // sign in their wallet without the auth becoming stale.
+  const AUTH_EXPIRATION_LEDGER_BUMP = 500;
+  if (simSuccess.result?.auth) {
+    const desiredExpiration =
+      simSuccess.latestLedger + AUTH_EXPIRATION_LEDGER_BUMP;
+    for (const authEntry of simSuccess.result.auth) {
+      const creds = authEntry.credentials();
+      if (creds.switch().name === "sorobanCredentialsAddress") {
+        creds.address().signatureExpirationLedger(desiredExpiration);
+      }
+    }
+  }
+
+  // Bump the fee before assembling (see buildSwapAndBridgeTx above for why:
+  // cloneFrom after assembly strips SorobanTransactionData).
+  const originalFee = parseInt(tx.fee, 10);
+  const simMinFee = parseInt((simSuccess as any).minResourceFee ?? "0", 10);
+  const targetFee = Math.ceil((originalFee + simMinFee) * 1.5);
+  const preAssemblyFee = Math.max(targetFee - simMinFee, originalFee);
+  (tx as any)._fee = preAssemblyFee.toString();
+
+  const finalTx = StellarSdk.rpc.assembleTransaction(tx, simSuccess).build();
+  return finalTx.toXDR();
+}
+
+/**
  * Fee information returned by getAllbridgeGasFee.
  *
  * The Allbridge `swap_and_bridge` contract accepts two fee parameters:

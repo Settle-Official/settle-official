@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createNextBridgeTx } from "@/lib/offramp/adapters/allbridge-next-adapter";
+import { simulateAndAssembleTx } from "@/lib/offramp/adapters/soroban-tx-builder";
 import {
   validateAmount,
   validateAddress,
@@ -39,8 +40,17 @@ export async function POST(request: NextRequest) {
       feePaymentMethod: selectedMethod,
     });
 
+    // Allbridge Next returns a bare, unsimulated transaction skeleton (no
+    // SorobanTransactionData, placeholder fee/sequence) — it must be
+    // simulated and assembled against our own Soroban RPC before it's
+    // submission-ready, same as the old Allbridge Core flow required.
+    const xdr = await simulateAndAssembleTx({
+      unsignedXdr: result.tx.tx,
+      sourceAddress: fromAddress,
+    });
+
     return NextResponse.json({
-      xdr: result.tx.tx,
+      xdr,
       sourceToken: "USDC",
       destinationToken: "USDC",
     });
