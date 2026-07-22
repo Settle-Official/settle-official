@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { FormCard } from "@/components/FormCard";
+import { FormCard, type GasFeeOptions } from "@/components/FormCard";
 import { Header } from "@/components/Header";
 import { ProgressSteps } from "@/components/ProgressSteps";
 import { RecentTransactionsTable } from "@/components/RecentTransactionsTable";
@@ -121,6 +121,9 @@ export function StellarampDashboard() {
   const [stellarXlmBalance, setStellarXlmBalance] = useState<string | null>(
     null,
   );
+  const [stellarSubentryCount, setStellarSubentryCount] = useState<
+    number | null
+  >(null);
   const [isLoadingBalance, setIsLoadingBalance] = useState(false);
   const [showMobileWalletModal, setShowMobileWalletModal] = useState(false);
   const [pricingState, setPricingState] = useState<{
@@ -133,11 +136,13 @@ export function StellarampDashboard() {
     } | null;
     isLoadingQuote: boolean;
     currency: string;
+    gasFeeOptions: GasFeeOptions | null;
   }>({
     amount: "",
     quote: null,
     isLoadingQuote: false,
     currency: "NGN",
+    gasFeeOptions: null,
   });
 
   const [platformStats, setPlatformStats] = useState<PlatformStats | null>(null);
@@ -175,6 +180,7 @@ export function StellarampDashboard() {
       if (!wallet?.publicKey) {
         setStellarUsdcBalance(null);
         setStellarXlmBalance(null);
+        setStellarSubentryCount(null);
         return;
       }
 
@@ -227,9 +233,15 @@ export function StellarampDashboard() {
             })
           : "0.00";
         setStellarXlmBalance(xlmDisplay);
+
+        const subentryCount = Number.parseInt(account?.subentry_count, 10);
+        setStellarSubentryCount(
+          Number.isFinite(subentryCount) ? subentryCount : null,
+        );
       } catch (error) {
                 setStellarUsdcBalance("0.00");
         setStellarXlmBalance("0.00");
+        setStellarSubentryCount(null);
       } finally {
         setIsLoadingBalance(false);
       }
@@ -295,14 +307,30 @@ export function StellarampDashboard() {
       return;
     }
 
-    // Pre-flight: if paying gas in XLM, check XLM balance vs approximate cost + reserve
+    // Pre-flight: if paying gas in XLM, check XLM balance vs the real bridge
+    // fee (from Allbridge Next) + this account's actual minimum balance
+    // requirement. No guessing here — a stale hardcoded estimate previously
+    // showed the wrong number and let people attempt a transaction that was
+    // always going to fail.
     if (tradeData.feePaymentMethod === "native") {
-      const xlmBal = parseFloat((stellarXlmBalance ?? "0").replace(/,/g, ""));
-      const MIN_XLM_RESERVE = 3;
-      const estimatedGas = 2.5;
-      if (xlmBal < MIN_XLM_RESERVE + estimatedGas) {
+      const nativeFeeFloat = pricingState.gasFeeOptions?.native.float;
+      if (nativeFeeFloat === undefined || stellarSubentryCount === null) {
         setToastError(
-          `Insufficient XLM for native gas fee. You have ${xlmBal.toFixed(2)} XLM but need ~${(MIN_XLM_RESERVE + estimatedGas).toFixed(1)} XLM (gas + account reserve). Switch to USDC fee payment or add more XLM.`,
+          "Still loading fee and account data — please wait a moment and try again.",
+        );
+        return;
+      }
+      const realGasFee = parseFloat(nativeFeeFloat);
+      // Stellar's base reserve (0.5 XLM per subentry, 2 base reserves
+      // minimum) has been a stable, unchanged network parameter for years.
+      const STELLAR_BASE_RESERVE_XLM = 0.5;
+      const minReserve =
+        (2 + stellarSubentryCount) * STELLAR_BASE_RESERVE_XLM;
+      const xlmBal = parseFloat((stellarXlmBalance ?? "0").replace(/,/g, ""));
+      const needed = minReserve + realGasFee;
+      if (xlmBal < needed) {
+        setToastError(
+          `Insufficient XLM for native gas fee. You have ${xlmBal.toFixed(2)} XLM but need ~${needed.toFixed(2)} XLM (${realGasFee.toFixed(4)} gas + ${minReserve.toFixed(1)} account reserve). Switch to USDC fee payment or add more XLM.`,
         );
         return;
       }
@@ -834,6 +862,7 @@ export function StellarampDashboard() {
       } | null;
       isLoadingQuote: boolean;
       currency: string;
+      gasFeeOptions: GasFeeOptions | null;
     }) => {
       setPricingState(data);
     },

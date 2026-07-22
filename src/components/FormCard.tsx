@@ -28,7 +28,13 @@ export interface FormCardProps {
     quote: Quote | null;
     isLoadingQuote: boolean;
     currency: string;
+    gasFeeOptions: GasFeeOptions | null;
   }) => void;
+}
+
+export interface GasFeeOptions {
+  native: { int: string; float: string };
+  stablecoin: { int: string; float: string };
 }
 
 interface Bank {
@@ -111,10 +117,9 @@ export function FormCard({
   const [feePaymentMethod, setFeePaymentMethod] = useState<
     "native" | "stablecoin"
   >("native");
-  const [gasFeeOptions, setGasFeeOptions] = useState<{
-    native: { int: string; float: string };
-    stablecoin: { int: string; float: string };
-  } | null>(null);
+  const [gasFeeOptions, setGasFeeOptions] = useState<GasFeeOptions | null>(
+    null,
+  );
   const [isLoadingFees, setIsLoadingFees] = useState(false);
   // Allbridge Next only offers a native-XLM relayer fee for this route today —
   // no stablecoin option. Derived (not hardcoded) so it stays correct if that
@@ -296,8 +301,14 @@ export function FormCard({
   }, [amount, currency, feePaymentMethod]);
 
   useEffect(() => {
-    onPricingUpdate?.({ amount, quote, isLoadingQuote, currency });
-  }, [amount, quote, isLoadingQuote, currency, onPricingUpdate]);
+    onPricingUpdate?.({
+      amount,
+      quote,
+      isLoadingQuote,
+      currency,
+      gasFeeOptions,
+    });
+  }, [amount, quote, isLoadingQuote, currency, gasFeeOptions, onPricingUpdate]);
 
   const getButtonText = () => {
     if (isExecutingOfframp) return "INITIATING OFFRAMP...";
@@ -414,7 +425,7 @@ export function FormCard({
               <span className="text-[0.65rem] text-[var(--muted)] opacity-70">
                 {stablecoinFeeAvailable
                   ? "Deducted from amount"
-                  : "Not offered for this route"}
+                  : "USDC fee is currently unavailable"}
               </span>
             </button>
             <button
