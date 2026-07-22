@@ -47,7 +47,7 @@ function getNonceBigInt(): bigint {
  * Convert a human-readable float amount to on-chain integer representation.
  * E.g.  "10.5" with decimals=7  → "105000000"
  */
-function floatToInt(amount: string, decimals: number): string {
+export function floatToInt(amount: string, decimals: number): string {
   const parts = amount.split(".");
   const intPart = parts[0] || "0";
   let fracPart = parts[1] || "";
