@@ -47,11 +47,13 @@ dependencies — this is a REST client, not an SDK integration).
 ### Task 1: Allbridge Next REST adapter
 
 **Files:**
+
 - Modify: `src/lib/offramp/adapters/soroban-tx-builder.ts` (export `floatToInt`)
 - Create: `src/lib/offramp/adapters/allbridge-next-adapter.ts`
 - Modify: `.env.example` (document the optional override var)
 
 **Interfaces:**
+
 - Consumes: nothing from other tasks (this is the foundation task).
 - Produces (used by Tasks 2–5):
   - `floatToInt(amount: string, decimals: number): string` — now exported from
@@ -168,7 +170,9 @@ async function nextApiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const bodyText = await res.text().catch(() => "");
-    throw new Error(`Allbridge Next API ${path} failed: ${res.status} ${bodyText}`);
+    throw new Error(
+      `Allbridge Next API ${path} failed: ${res.status} ${bodyText}`,
+    );
   }
   return res.json();
 }
@@ -189,7 +193,9 @@ export async function getNextQuote(amountFloat: string): Promise<NextQuote> {
   });
   const quote = quotes?.[0];
   if (!quote) {
-    throw new Error("Allbridge Next returned no quote for SRB:USDC -> BAS:USDC");
+    throw new Error(
+      "Allbridge Next returned no quote for SRB:USDC -> BAS:USDC",
+    );
   }
   return quote;
 }
@@ -210,7 +216,9 @@ export async function getNextGasFeeOptions(
   return {
     native: {
       int: nativeFee?.amount || "0",
-      float: nativeFee ? intToFloat(nativeFee.amount, STELLAR_USDC_DECIMALS) : "0",
+      float: nativeFee
+        ? intToFloat(nativeFee.amount, STELLAR_USDC_DECIMALS)
+        : "0",
     },
     stablecoin: {
       int: stablecoinFee?.amount || "0",
@@ -233,10 +241,12 @@ export async function createNextBridgeTx(params: {
   destinationAddress: string;
   feePaymentMethod: "native" | "stablecoin";
 }): Promise<NextBridgeTxResult> {
-  const { amountFloat, sourceAddress, destinationAddress, feePaymentMethod } = params;
+  const { amountFloat, sourceAddress, destinationAddress, feePaymentMethod } =
+    params;
   const quote = await getNextQuote(amountFloat);
   const { relayerFees, ...quoteRest } = quote;
-  const wantedTokenId = feePaymentMethod === "native" ? "native" : quote.sourceTokenId;
+  const wantedTokenId =
+    feePaymentMethod === "native" ? "native" : quote.sourceTokenId;
   const relayerFee = relayerFees.find((f) => f.tokenId === wantedTokenId);
   if (!relayerFee) {
     throw new Error(
@@ -339,9 +349,11 @@ git commit -m "feat: add Allbridge Next REST adapter for Stellar<->Base bridging
 ### Task 2: Rewire gas-fee-options route
 
 **Files:**
+
 - Modify: `src/app/api/offramp/bridge/gas-fee-options/route.ts` (full rewrite)
 
 **Interfaces:**
+
 - Consumes: `getNextGasFeeOptions` from Task 1.
 - Produces: unchanged external contract — `GET` still returns
   `{ feeOptions: { native: {int,float}, stablecoin: {int,float} } }` on success, or
@@ -412,9 +424,11 @@ git commit -m "fix: route gas-fee-options through Allbridge Next instead of brok
 ### Task 3: Rewire build-tx route
 
 **Files:**
+
 - Modify: `src/app/api/offramp/bridge/build-tx/route.ts` (full rewrite)
 
 **Interfaces:**
+
 - Consumes: `createNextBridgeTx` from Task 1.
 - Produces: unchanged external contract — `POST` still returns
   `{ xdr: string, sourceToken: string, destinationToken: string }` on success (same field
@@ -479,7 +493,7 @@ export async function POST(request: NextRequest) {
       userMessage =
         "Insufficient XLM balance for the native gas fee. " +
         "Your remaining XLM would fall below Stellar's minimum account reserve. " +
-        "Switch to USDC fee payment or add more XLM to your wallet.";
+        "Add more XLM to your wallet.";
     } else if (
       msg.includes("contract call failed") &&
       msg.includes("transfer")
@@ -541,9 +555,11 @@ git commit -m "fix: build offramp bridge tx via Allbridge Next instead of broken
 ### Task 4: Rewire bridge status route
 
 **Files:**
+
 - Modify: `src/app/api/offramp/bridge/status/[txHash]/route.ts` (full rewrite)
 
 **Interfaces:**
+
 - Consumes: `getNextTransferStatus` from Task 1.
 - Produces: unchanged external contract — `GET` returns `{ data: { status, txHash, receiveAmount? } }`.
 
@@ -604,9 +620,11 @@ git commit -m "fix: poll bridge status via Allbridge Next instead of broken Core
 ### Task 5: Rewire the offramp quote route
 
 **Files:**
+
 - Modify: `src/app/api/offramp/quote/route.ts` (full rewrite)
 
 **Interfaces:**
+
 - Consumes: `getNextQuote`, `getNextGasFeeOptions`, `BASE_USDC_DECIMALS`, `intToFloat` from Task 1.
 - Produces: response shape gains no new required fields for existing callers, but now accepts
   an optional `feePaymentMethod: "native" | "stablecoin"` body field (Task 6 will send it).
@@ -634,7 +652,8 @@ import {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { amount, token, currency, network, provider_id, feePaymentMethod } = body;
+    const { amount, token, currency, network, provider_id, feePaymentMethod } =
+      body;
 
     if (!validateAmount(amount)) {
       return NextResponse.json({ error: "Invalid amount" }, { status: 400 });
@@ -756,9 +775,11 @@ git commit -m "fix: quote offramp bridge amount via Allbridge Next instead of br
 ### Task 6: Update FormCard.tsx to use the server quote route
 
 **Files:**
+
 - Modify: `src/components/FormCard.tsx`
 
 **Interfaces:**
+
 - Consumes: `POST /api/offramp/quote` (Task 5's response shape).
 - Produces: no change to `FormCard`'s own exported props/behavior — `quote`, `isLoadingQuote`,
   `gasFeeOptions` state shapes are unchanged, so `StellarampDashboard.tsx` needs no changes.
@@ -798,57 +819,57 @@ Find the `useEffect` that starts with `// Get quote when amount or fee method ch
 (originally lines 258–338) and replace its entire body with:
 
 ```tsx
-  // Get quote when amount, currency, or fee method changes
-  useEffect(() => {
-    const getQuote = async () => {
-      if (amount && parseFloat(amount) >= 0.7) {
-        setIsLoadingQuote(true);
-        try {
-          const response = await fetch("/api/offramp/quote", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              amount,
-              token: "USDC",
-              currency,
-              network: "base",
-              feePaymentMethod,
-            }),
-          });
-          if (!response.ok) {
-            const payload = await response.json().catch(() => ({}));
-            throw new Error(
-              payload?.error || `Quote request failed: ${response.status}`,
-            );
-          }
-          const payload = await response.json();
-          const directQuote: Quote = {
-            quoteId: payload.quoteId,
-            sourceAmount: payload.sourceAmount,
-            destinationAmount: payload.destinationAmount,
-            rate: payload.rate,
+// Get quote when amount, currency, or fee method changes
+useEffect(() => {
+  const getQuote = async () => {
+    if (amount && parseFloat(amount) >= 0.7) {
+      setIsLoadingQuote(true);
+      try {
+        const response = await fetch("/api/offramp/quote", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            amount,
+            token: "USDC",
             currency,
-            estimatedTimeMs: payload.estimatedTime,
-          };
-
-          if (!isValidQuote(directQuote)) {
-            setQuote(null);
-            return;
-          }
-          setQuote(directQuote);
-        } catch (error) {
-          setQuote(null);
-        } finally {
-          setIsLoadingQuote(false);
+            network: "base",
+            feePaymentMethod,
+          }),
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(
+            payload?.error || `Quote request failed: ${response.status}`,
+          );
         }
-      } else {
-        setQuote(null);
-      }
-    };
+        const payload = await response.json();
+        const directQuote: Quote = {
+          quoteId: payload.quoteId,
+          sourceAmount: payload.sourceAmount,
+          destinationAmount: payload.destinationAmount,
+          rate: payload.rate,
+          currency,
+          estimatedTimeMs: payload.estimatedTime,
+        };
 
-    const debounce = setTimeout(getQuote, 500);
-    return () => clearTimeout(debounce);
-  }, [amount, currency, feePaymentMethod]);
+        if (!isValidQuote(directQuote)) {
+          setQuote(null);
+          return;
+        }
+        setQuote(directQuote);
+      } catch (error) {
+        setQuote(null);
+      } finally {
+        setIsLoadingQuote(false);
+      }
+    } else {
+      setQuote(null);
+    }
+  };
+
+  const debounce = setTimeout(getQuote, 500);
+  return () => clearTimeout(debounce);
+}, [amount, currency, feePaymentMethod]);
 ```
 
 Note the dependency array dropped `gasFeeOptions` — the server route now looks up fresh fee
@@ -865,6 +886,7 @@ removed `getAllbridgeContext`/`getAllbridgeQuote`/etc.).
 - [ ] **Step 4: Manual UI verification**
 
 With `npm run dev` running, open `http://localhost:3000` in a browser:
+
 1. Confirm the "PAY GAS FEE WITH" section loads real numbers instead of getting stuck on
    "Loading..." or showing a console 500 error.
 2. Type `10` into the "AMOUNT IN USDC" field.
@@ -905,6 +927,7 @@ balance (for the native gas fee option) or ~2 USDC alone (for the stablecoin fee
 With `npm run dev` running, open the app, connect the real wallet, enter `1` (or the
 minimum, `0.7`) as the amount, fill in real beneficiary bank details for a NGN payout,
 and click through to completion. Watch for:
+
 - The gas fee selector shows real numbers (not stuck loading).
 - The settlement breakdown resolves to a real payout total (not stuck on "Calculating…").
 - The wallet prompts you to sign a transaction (confirms `build-tx` produced valid XDR).

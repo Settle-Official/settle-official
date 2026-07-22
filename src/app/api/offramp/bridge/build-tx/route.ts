@@ -62,7 +62,7 @@ export async function POST(request: NextRequest) {
       userMessage =
         "Insufficient XLM balance for the native gas fee. " +
         "Your remaining XLM would fall below Stellar's minimum account reserve. " +
-        "Switch to USDC fee payment or add more XLM to your wallet.";
+        "Add more XLM to your wallet.";
     } else if (
       msg.includes("contract call failed") &&
       msg.includes("transfer")
