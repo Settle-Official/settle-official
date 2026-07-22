@@ -1,19 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  initializeAllbridgeSdk,
-  getAllbridgeTokens,
-} from "@/lib/offramp/adapters/allbridge-adapter";
-import {
-  buildSwapAndBridgeTx,
-  getAllbridgeGasFeeOptions,
-  getBridgeFeeForMethod,
-} from "@/lib/offramp/adapters/soroban-tx-builder";
+import { createNextBridgeTx } from "@/lib/offramp/adapters/allbridge-next-adapter";
+import { simulateAndAssembleTx } from "@/lib/offramp/adapters/soroban-tx-builder";
 import {
   validateAmount,
   validateAddress,
 } from "@/lib/offramp/utils/validation";
 
-// Allow up to 30s for SDK init + simulation (Vercel hobby default is 10s)
+// Allow up to 30s for the Allbridge Next API round trip
 export const maxDuration = 30;
 
 export async function POST(request: NextRequest) {
@@ -21,19 +14,15 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { amount, fromAddress, toAddress, feePaymentMethod } = body;
 
-    
-    // Validation
     if (!validateAmount(amount)) {
       return NextResponse.json({ error: "Invalid amount" }, { status: 400 });
     }
-
     if (!validateAddress(fromAddress, "stellar")) {
       return NextResponse.json(
         { error: "Invalid Stellar address" },
         { status: 400 },
       );
     }
-
     if (!validateAddress(toAddress, "base")) {
       return NextResponse.json(
         { error: "Invalid Base address" },
@@ -41,68 +30,39 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    
-    // Use Allbridge SDK only for metadata & fee calculation
-    const sdk = await initializeAllbridgeSdk();
-    const tokens = await getAllbridgeTokens(sdk);
-
-    if (!tokens.stellar.usdc || !tokens.base.usdc) {
-      throw new Error("USDC tokens not found on Allbridge");
-    }
-
-    const stellarUsdc = tokens.stellar.usdc;
-    const baseUsdc = tokens.base.usdc;
-
-    
-    // Get fee options and select based on user preference
-    const feeOptions = await getAllbridgeGasFeeOptions(
-      sdk,
-      stellarUsdc,
-      baseUsdc,
-    );
     const selectedMethod: "native" | "stablecoin" =
       feePaymentMethod === "native" ? "native" : "stablecoin";
-    const feeInfo = getBridgeFeeForMethod(feeOptions, selectedMethod);
-    
-    // Build the Soroban transaction using the project's up-to-date stellar-sdk
-    // (instead of the Allbridge SDK's bundled stellar-sdk@13.3.0 which only
-    //  supports Protocol 21 – the network is now on Protocol 25).
-    const xdr = await buildSwapAndBridgeTx({
-      bridgeContractId: stellarUsdc.bridgeAddress,
-      fromAddress,
-      toAddress,
-      sourceTokenAddress: stellarUsdc.tokenAddress,
-      sourceTokenDecimals: stellarUsdc.decimals,
-      destinationTokenAddress: baseUsdc.tokenAddress,
-      destinationChainId: baseUsdc.allbridgeChainId,
-      amount,
-      gasAmount: feeInfo.gasAmount,
-      feeTokenAmount: feeInfo.feeTokenAmount,
+
+    const result = await createNextBridgeTx({
+      amountFloat: amount,
+      sourceAddress: fromAddress,
+      destinationAddress: toAddress,
+      feePaymentMethod: selectedMethod,
     });
 
-    if (!xdr || typeof xdr !== "string") {
-      throw new Error("Transaction builder returned empty or non-string XDR");
-    }
+    // Allbridge Next returns a bare, unsimulated transaction skeleton (no
+    // SorobanTransactionData, placeholder fee/sequence) — it must be
+    // simulated and assembled against our own Soroban RPC before it's
+    // submission-ready, same as the old Allbridge Core flow required.
+    const xdr = await simulateAndAssembleTx({
+      unsignedXdr: result.tx.tx,
+      sourceAddress: fromAddress,
+    });
 
-    
     return NextResponse.json({
       xdr,
-      sourceToken: stellarUsdc.symbol,
-      destinationToken: baseUsdc.symbol,
+      sourceToken: "USDC",
+      destinationToken: "USDC",
     });
   } catch (error: any) {
-    
-    // Parse common simulation errors into user-friendly messages
     let userMessage = error.message || "Failed to build transaction";
     const msg = error.message || "";
 
     if (msg.includes("resulting balance is not within the allowed range")) {
-      // The contract tried to transfer XLM (native gas) but the remaining
-      // balance would drop below the Stellar minimum account reserve.
       userMessage =
         "Insufficient XLM balance for the native gas fee. " +
         "Your remaining XLM would fall below Stellar's minimum account reserve. " +
-        "Switch to USDC fee payment or add more XLM to your wallet.";
+        "Add more XLM to your wallet.";
     } else if (
       msg.includes("contract call failed") &&
       msg.includes("transfer")

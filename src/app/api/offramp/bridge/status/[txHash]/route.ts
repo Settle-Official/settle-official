@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  initializeAllbridgeSdk,
-  getAllbridgeTransferStatus,
-} from "@/lib/offramp/adapters/allbridge-adapter";
+import { getNextTransferStatus } from "@/lib/offramp/adapters/allbridge-next-adapter";
 
 export async function GET(
   request: NextRequest,
@@ -17,31 +14,9 @@ export async function GET(
     );
   }
 
-  try {
-    // Initialize Allbridge SDK
-    const sdk = await initializeAllbridgeSdk();
-
-    // Get transfer status (SRB is Stellar chain symbol in Allbridge)
-    const status = await getAllbridgeTransferStatus(sdk, "SRB", txHash);
-
-    return NextResponse.json({ data: status });
-  } catch (error: any) {
-    // Allbridge may return 404 early on before indexing the cross-chain transfer.
-    // Return a pending status instead of failing so the client can keep polling.
-    const is404 =
-      error?.response?.status === 404 ||
-      error?.status === 404 ||
-      error?.message?.includes("404");
-
-    if (is404) {
-      return NextResponse.json({
-        data: { status: "pending", txHash },
-      });
-    }
-
-    return NextResponse.json(
-      { error: error.message || "Failed to get bridge status" },
-      { status: 500 },
-    );
-  }
+  // getNextTransferStatus never throws — it resolves to "pending" on any
+  // lookup failure, since this polling is best-effort and doesn't gate
+  // completion (Paycrest's own payout detection is the real success signal).
+  const status = await getNextTransferStatus(txHash);
+  return NextResponse.json({ data: status });
 }

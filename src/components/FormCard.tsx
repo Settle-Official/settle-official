@@ -2,11 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { cn } from "@/lib/cn";
-import {
-  getAllbridgeQuote,
-  getAllbridgeTokens,
-  initializeAllbridgeSdk,
-} from "@/lib/offramp/adapters/allbridge-adapter";
+import { SelectField } from "@/components/SelectField";
 
 export interface FormCardProps {
   readonly isConnected: boolean;
@@ -33,7 +29,13 @@ export interface FormCardProps {
     quote: Quote | null;
     isLoadingQuote: boolean;
     currency: string;
+    gasFeeOptions: GasFeeOptions | null;
   }) => void;
+}
+
+export interface GasFeeOptions {
+  native: { int: string; float: string };
+  stablecoin: { int: string; float: string };
 }
 
 interface Bank {
@@ -57,18 +59,6 @@ interface Quote {
 }
 
 const PAYCREST_API_BASE = "https://api.paycrest.io/v1";
-let allbridgeContextPromise: Promise<{ sdk: any; tokens: any }> | null = null;
-
-async function getAllbridgeContext() {
-  if (!allbridgeContextPromise) {
-    allbridgeContextPromise = (async () => {
-      const sdk = await initializeAllbridgeSdk();
-      const tokens = await getAllbridgeTokens(sdk);
-      return { sdk, tokens };
-    })();
-  }
-  return allbridgeContextPromise;
-}
 
 function isValidQuote(data: unknown): data is Quote {
   if (!data || typeof data !== "object") return false;
@@ -128,11 +118,15 @@ export function FormCard({
   const [feePaymentMethod, setFeePaymentMethod] = useState<
     "native" | "stablecoin"
   >("native");
-  const [gasFeeOptions, setGasFeeOptions] = useState<{
-    native: { int: string; float: string };
-    stablecoin: { int: string; float: string };
-  } | null>(null);
+  const [gasFeeOptions, setGasFeeOptions] = useState<GasFeeOptions | null>(
+    null,
+  );
   const [isLoadingFees, setIsLoadingFees] = useState(false);
+  // Allbridge Next only offers a native-XLM relayer fee for this route today —
+  // no stablecoin option. Derived (not hardcoded) so it stays correct if that
+  // ever changes upstream.
+  const stablecoinFeeAvailable =
+    !!gasFeeOptions && parseFloat(gasFeeOptions.stablecoin.float) > 0;
 
   // Reset form fields when resetKey changes (after successful transaction)
   useEffect(() => {
@@ -255,67 +249,37 @@ export function FormCard({
     verifyAccount();
   }, [accountNumber, bank]);
 
-  // Get quote when amount or fee method changes
+  // Get quote when amount, currency, or fee method changes
   useEffect(() => {
     const getQuote = async () => {
       if (amount && parseFloat(amount) >= 0.7) {
         setIsLoadingQuote(true);
         try {
-          const { sdk, tokens } = await getAllbridgeContext();
-          if (!tokens?.stellar?.usdc || !tokens?.base?.usdc) {
-            throw new Error("USDC tokens not found on Allbridge");
+          const response = await fetch("/api/offramp/quote", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              amount,
+              token: "USDC",
+              currency,
+              network: "base",
+              feePaymentMethod,
+            }),
+          });
+          if (!response.ok) {
+            const payload = await response.json().catch(() => ({}));
+            throw new Error(
+              payload?.error || `Quote request failed: ${response.status}`,
+            );
           }
-
-          // When paying with stablecoin, the fee is deducted from the input
-          // amount before bridging. Re-quote with the post-fee amount for accuracy.
-          let quoteAmount = amount;
-          if (feePaymentMethod === "stablecoin" && gasFeeOptions) {
-            const stableFee = parseFloat(gasFeeOptions.stablecoin.float);
-            const afterFee = parseFloat(amount) - stableFee;
-            if (afterFee <= 0) {
-              setQuote(null);
-              setIsLoadingQuote(false);
-              return;
-            }
-            quoteAmount = afterFee.toFixed(7);
-          }
-
-          const bridgeQuote = await getAllbridgeQuote(
-            sdk,
-            tokens.stellar.usdc,
-            tokens.base.usdc,
-            quoteAmount,
-          );
-
-          const rateResponse = await fetch(
-            `${PAYCREST_API_BASE}/rates/USDC/${encodeURIComponent(
-              bridgeQuote.receiveAmount,
-            )}/${encodeURIComponent(currency)}?network=base`,
-            { method: "GET" },
-          );
-          if (!rateResponse.ok) {
-            throw new Error(`Rates request failed: ${rateResponse.status}`);
-          }
-          const ratePayload = await rateResponse.json();
-          const rateRaw =
-            typeof ratePayload?.data === "string" ||
-            typeof ratePayload?.data === "number"
-              ? ratePayload.data
-              : ratePayload;
-          const rate = Number.parseFloat(String(rateRaw));
-          const receivedAmount = Number.parseFloat(bridgeQuote.receiveAmount);
-          if (!Number.isFinite(rate) || !Number.isFinite(receivedAmount)) {
-            throw new Error("Invalid rate or bridge quote payload");
-          }
-
-          const destinationAmount = (receivedAmount * rate * 0.99).toFixed(2); // 1% platform fee
+          const payload = await response.json();
           const directQuote: Quote = {
-            quoteId: `quote_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
-            sourceAmount: amount,
-            destinationAmount,
-            rate,
+            quoteId: payload.quoteId,
+            sourceAmount: payload.sourceAmount,
+            destinationAmount: payload.destinationAmount,
+            rate: payload.rate,
             currency,
-            estimatedTimeMs: bridgeQuote.estimatedTime,
+            estimatedTimeMs: payload.estimatedTime,
           };
 
           if (!isValidQuote(directQuote)) {
@@ -335,11 +299,17 @@ export function FormCard({
 
     const debounce = setTimeout(getQuote, 500);
     return () => clearTimeout(debounce);
-  }, [amount, currency, feePaymentMethod, gasFeeOptions]);
+  }, [amount, currency, feePaymentMethod]);
 
   useEffect(() => {
-    onPricingUpdate?.({ amount, quote, isLoadingQuote, currency });
-  }, [amount, quote, isLoadingQuote, currency, onPricingUpdate]);
+    onPricingUpdate?.({
+      amount,
+      quote,
+      isLoadingQuote,
+      currency,
+      gasFeeOptions,
+    });
+  }, [amount, quote, isLoadingQuote, currency, gasFeeOptions, onPricingUpdate]);
 
   const getButtonText = () => {
     if (isExecutingOfframp) return "INITIATING OFFRAMP...";
@@ -426,13 +396,14 @@ export function FormCard({
             <button
               type="button"
               onClick={() => setFeePaymentMethod("stablecoin")}
-              disabled={isExecutingOfframp}
+              disabled={isExecutingOfframp || !stablecoinFeeAvailable}
               className={cn(
                 "flex flex-col items-start gap-[0.15rem] rounded-none border-2 px-[0.8rem] py-[0.55rem] text-left transition-colors",
                 feePaymentMethod === "stablecoin"
                   ? "border-[var(--accent)] bg-[var(--accent)]/8"
                   : "border-[#444] hover:border-[#666]",
-                isExecutingOfframp && "cursor-not-allowed opacity-50",
+                (isExecutingOfframp || !stablecoinFeeAvailable) &&
+                  "cursor-not-allowed opacity-50",
               )}
             >
               <span
@@ -448,12 +419,14 @@ export function FormCard({
               <span className="text-[0.85rem] text-[var(--muted)]">
                 {isLoadingFees
                   ? "Loading..."
-                  : gasFeeOptions
-                    ? `~${parseFloat(gasFeeOptions.stablecoin.float).toFixed(4)} USDC`
-                    : "—"}
+                  : stablecoinFeeAvailable
+                    ? `~${parseFloat(gasFeeOptions!.stablecoin.float).toFixed(4)} USDC`
+                    : "Unavailable"}
               </span>
               <span className="text-[0.65rem] text-[var(--muted)] opacity-70">
-                Deducted from amount
+                {stablecoinFeeAvailable
+                  ? "Deducted from amount"
+                  : "USDC fee is currently unavailable"}
               </span>
             </button>
             <button
@@ -528,6 +501,7 @@ export function FormCard({
               name: `${c.name} (${c.symbol})`,
             }))}
             isLoading={isLoadingCurrencies}
+            placeholder="Select currency"
           />
           <InputField
             label="ACCOUNT NUMBER"
@@ -542,6 +516,7 @@ export function FormCard({
             onChange={setBank}
             options={banks}
             isLoading={isLoadingBanks}
+            placeholder="Select bank"
           />
         </div>
         <Field
@@ -643,6 +618,9 @@ function InputField({
           step={step}
           className={cn(
             "flex-1 bg-transparent text-[0.95rem] outline-none",
+            "[appearance:textfield]",
+            "[&::-webkit-inner-spin-button]:m-0 [&::-webkit-inner-spin-button]:appearance-none",
+            "[&::-webkit-outer-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none",
             disabled && "cursor-not-allowed opacity-50",
             "placeholder:text-[var(--muted)]",
           )}
@@ -650,72 +628,6 @@ function InputField({
         {suffix ? (
           <span className="text-[0.62rem] text-[var(--accent)]">{suffix}</span>
         ) : null}
-      </div>
-    </div>
-  );
-}
-
-interface SelectFieldProps {
-  readonly label: string;
-  readonly value: string;
-  readonly onChange: (value: string) => void;
-  readonly options: Bank[];
-  readonly isLoading?: boolean;
-}
-
-function SelectField({
-  label,
-  value,
-  onChange,
-  options,
-  isLoading,
-}: Readonly<SelectFieldProps>) {
-  return (
-    <div className="flex flex-col gap-[0.4rem]">
-      <label className="text-[0.69rem] tracking-[0.08em] text-[var(--muted)]">
-        {label}
-      </label>
-      <div className="relative h-[46px] border border-[var(--line)]">
-        <select
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          disabled={isLoading}
-          className={cn(
-            "h-full w-full appearance-none bg-transparent px-[0.8rem] text-[0.95rem] outline-none",
-            isLoading && "cursor-not-allowed opacity-50",
-            !value && "text-[var(--muted)]",
-          )}
-        >
-          <option value="" disabled>
-            {isLoading ? "Loading banks..." : "Select bank"}
-          </option>
-          {options.map((bank) => (
-            <option
-              key={bank.code}
-              value={bank.code}
-              className="bg-[#0a0a0a] text-white"
-            >
-              {bank.name}
-            </option>
-          ))}
-        </select>
-        <div className="pointer-events-none absolute right-[0.8rem] top-1/2 -translate-y-1/2">
-          <svg
-            width="12"
-            height="8"
-            viewBox="0 0 12 8"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-          >
-            <path
-              d="M1 1L6 6L11 1"
-              stroke="var(--accent)"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </div>
       </div>
     </div>
   );

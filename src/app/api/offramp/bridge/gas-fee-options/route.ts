@@ -1,28 +1,12 @@
 import { NextResponse } from "next/server";
-import {
-  initializeAllbridgeSdk,
-  getAllbridgeTokens,
-} from "@/lib/offramp/adapters/allbridge-adapter";
-import { getAllbridgeGasFeeOptions } from "@/lib/offramp/adapters/soroban-tx-builder";
+import { getNextGasFeeOptions } from "@/lib/offramp/adapters/allbridge-next-adapter";
 
 export async function GET() {
   try {
-    const sdk = await initializeAllbridgeSdk();
-    const tokens = await getAllbridgeTokens(sdk);
-
-    if (!tokens?.stellar?.usdc || !tokens?.base?.usdc) {
-      return NextResponse.json(
-        { error: "USDC tokens not found on Allbridge" },
-        { status: 500 },
-      );
-    }
-
-    const feeOptions = await getAllbridgeGasFeeOptions(
-      sdk,
-      tokens.stellar.usdc,
-      tokens.base.usdc,
-    );
-
+    // Any positive placeholder amount works here — Allbridge Next's relayer
+    // fee for this route is a flat gas-cost reimbursement, not a percentage,
+    // so it doesn't vary with the amount the user eventually enters.
+    const feeOptions = await getNextGasFeeOptions("1");
     return NextResponse.json({ feeOptions });
   } catch (error: any) {
     return NextResponse.json(
