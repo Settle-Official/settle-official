@@ -2,11 +2,6 @@
 
 import { useState, useEffect } from "react";
 import { cn } from "@/lib/cn";
-import {
-  getAllbridgeQuote,
-  getAllbridgeTokens,
-  initializeAllbridgeSdk,
-} from "@/lib/offramp/adapters/allbridge-adapter";
 
 export interface FormCardProps {
   readonly isConnected: boolean;
@@ -57,18 +52,6 @@ interface Quote {
 }
 
 const PAYCREST_API_BASE = "https://api.paycrest.io/v1";
-let allbridgeContextPromise: Promise<{ sdk: any; tokens: any }> | null = null;
-
-async function getAllbridgeContext() {
-  if (!allbridgeContextPromise) {
-    allbridgeContextPromise = (async () => {
-      const sdk = await initializeAllbridgeSdk();
-      const tokens = await getAllbridgeTokens(sdk);
-      return { sdk, tokens };
-    })();
-  }
-  return allbridgeContextPromise;
-}
 
 function isValidQuote(data: unknown): data is Quote {
   if (!data || typeof data !== "object") return false;
@@ -133,6 +116,11 @@ export function FormCard({
     stablecoin: { int: string; float: string };
   } | null>(null);
   const [isLoadingFees, setIsLoadingFees] = useState(false);
+  // Allbridge Next only offers a native-XLM relayer fee for this route today —
+  // no stablecoin option. Derived (not hardcoded) so it stays correct if that
+  // ever changes upstream.
+  const stablecoinFeeAvailable =
+    !!gasFeeOptions && parseFloat(gasFeeOptions.stablecoin.float) > 0;
 
   // Reset form fields when resetKey changes (after successful transaction)
   useEffect(() => {
@@ -255,67 +243,37 @@ export function FormCard({
     verifyAccount();
   }, [accountNumber, bank]);
 
-  // Get quote when amount or fee method changes
+  // Get quote when amount, currency, or fee method changes
   useEffect(() => {
     const getQuote = async () => {
       if (amount && parseFloat(amount) >= 0.7) {
         setIsLoadingQuote(true);
         try {
-          const { sdk, tokens } = await getAllbridgeContext();
-          if (!tokens?.stellar?.usdc || !tokens?.base?.usdc) {
-            throw new Error("USDC tokens not found on Allbridge");
+          const response = await fetch("/api/offramp/quote", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              amount,
+              token: "USDC",
+              currency,
+              network: "base",
+              feePaymentMethod,
+            }),
+          });
+          if (!response.ok) {
+            const payload = await response.json().catch(() => ({}));
+            throw new Error(
+              payload?.error || `Quote request failed: ${response.status}`,
+            );
           }
-
-          // When paying with stablecoin, the fee is deducted from the input
-          // amount before bridging. Re-quote with the post-fee amount for accuracy.
-          let quoteAmount = amount;
-          if (feePaymentMethod === "stablecoin" && gasFeeOptions) {
-            const stableFee = parseFloat(gasFeeOptions.stablecoin.float);
-            const afterFee = parseFloat(amount) - stableFee;
-            if (afterFee <= 0) {
-              setQuote(null);
-              setIsLoadingQuote(false);
-              return;
-            }
-            quoteAmount = afterFee.toFixed(7);
-          }
-
-          const bridgeQuote = await getAllbridgeQuote(
-            sdk,
-            tokens.stellar.usdc,
-            tokens.base.usdc,
-            quoteAmount,
-          );
-
-          const rateResponse = await fetch(
-            `${PAYCREST_API_BASE}/rates/USDC/${encodeURIComponent(
-              bridgeQuote.receiveAmount,
-            )}/${encodeURIComponent(currency)}?network=base`,
-            { method: "GET" },
-          );
-          if (!rateResponse.ok) {
-            throw new Error(`Rates request failed: ${rateResponse.status}`);
-          }
-          const ratePayload = await rateResponse.json();
-          const rateRaw =
-            typeof ratePayload?.data === "string" ||
-            typeof ratePayload?.data === "number"
-              ? ratePayload.data
-              : ratePayload;
-          const rate = Number.parseFloat(String(rateRaw));
-          const receivedAmount = Number.parseFloat(bridgeQuote.receiveAmount);
-          if (!Number.isFinite(rate) || !Number.isFinite(receivedAmount)) {
-            throw new Error("Invalid rate or bridge quote payload");
-          }
-
-          const destinationAmount = (receivedAmount * rate * 0.99).toFixed(2); // 1% platform fee
+          const payload = await response.json();
           const directQuote: Quote = {
-            quoteId: `quote_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
-            sourceAmount: amount,
-            destinationAmount,
-            rate,
+            quoteId: payload.quoteId,
+            sourceAmount: payload.sourceAmount,
+            destinationAmount: payload.destinationAmount,
+            rate: payload.rate,
             currency,
-            estimatedTimeMs: bridgeQuote.estimatedTime,
+            estimatedTimeMs: payload.estimatedTime,
           };
 
           if (!isValidQuote(directQuote)) {
@@ -335,7 +293,7 @@ export function FormCard({
 
     const debounce = setTimeout(getQuote, 500);
     return () => clearTimeout(debounce);
-  }, [amount, currency, feePaymentMethod, gasFeeOptions]);
+  }, [amount, currency, feePaymentMethod]);
 
   useEffect(() => {
     onPricingUpdate?.({ amount, quote, isLoadingQuote, currency });
@@ -426,13 +384,14 @@ export function FormCard({
             <button
               type="button"
               onClick={() => setFeePaymentMethod("stablecoin")}
-              disabled={isExecutingOfframp}
+              disabled={isExecutingOfframp || !stablecoinFeeAvailable}
               className={cn(
                 "flex flex-col items-start gap-[0.15rem] rounded-none border-2 px-[0.8rem] py-[0.55rem] text-left transition-colors",
                 feePaymentMethod === "stablecoin"
                   ? "border-[var(--accent)] bg-[var(--accent)]/8"
                   : "border-[#444] hover:border-[#666]",
-                isExecutingOfframp && "cursor-not-allowed opacity-50",
+                (isExecutingOfframp || !stablecoinFeeAvailable) &&
+                  "cursor-not-allowed opacity-50",
               )}
             >
               <span
@@ -448,12 +407,14 @@ export function FormCard({
               <span className="text-[0.85rem] text-[var(--muted)]">
                 {isLoadingFees
                   ? "Loading..."
-                  : gasFeeOptions
-                    ? `~${parseFloat(gasFeeOptions.stablecoin.float).toFixed(4)} USDC`
-                    : "—"}
+                  : stablecoinFeeAvailable
+                    ? `~${parseFloat(gasFeeOptions!.stablecoin.float).toFixed(4)} USDC`
+                    : "Unavailable"}
               </span>
               <span className="text-[0.65rem] text-[var(--muted)] opacity-70">
-                Deducted from amount
+                {stablecoinFeeAvailable
+                  ? "Deducted from amount"
+                  : "Not offered for this route"}
               </span>
             </button>
             <button
