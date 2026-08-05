@@ -122,9 +122,19 @@ export async function POST(request: NextRequest) {
       typeof error?.status === "number" && error.status >= 400
         ? error.status
         : 500;
+
+    // Paycrest 5xx means their backend/provider is having trouble (e.g. an
+    // upstream rail outage on the virtual-account side) rather than anything
+    // wrong with this request. Surface a friendly message instead of their
+    // raw error, but keep the original in `details` for debugging/support.
+    const isUpstreamOutage = statusCode >= 500;
+    const userMessage = isUpstreamOutage
+      ? "Deposit provisioning is temporarily unavailable. This is an issue on our payment provider's side — please try again in a few minutes."
+      : error?.message || "Failed to create onramp order";
+
     return NextResponse.json(
       {
-        error: error?.message || "Failed to create onramp order",
+        error: userMessage,
         details: error?.details ?? null,
       },
       { status: statusCode },
