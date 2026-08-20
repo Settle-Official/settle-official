@@ -5,7 +5,7 @@ import {
   contractStrkeyToBytes32Hex,
   zeroBytes32Scval,
   buildForwarderHookData,
-} from "./address-encoding.ts";
+} from "./address-encoding";
 
 test("evmAddressToScvBytes32 left-pads a 20-byte address into 32 bytes", () => {
   const scval = evmAddressToScvBytes32("0x000000000000000000000000000000000000dEaD");

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { CCTP_DOMAIN, CCTP_CONFIG, STELLAR_USDC_DECIMALS, BASE_USDC_DECIMALS } from "./constants.ts";
+import { CCTP_DOMAIN, CCTP_CONFIG, STELLAR_USDC_DECIMALS, BASE_USDC_DECIMALS } from "./constants";
 
 test("domains match Circle's published values", () => {
   assert.equal(CCTP_DOMAIN.stellar, 27);
