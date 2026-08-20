@@ -7,6 +7,7 @@ import {
   STELLAR_USDC_DECIMALS,
 } from "./constants";
 import { evmAddressToScvBytes32, zeroBytes32Scval } from "./address-encoding";
+import { getCctpStellarAccount, assertStellarGasFloor } from "./stellar-hot-wallet";
 
 const SEND_TX_TIMEOUT_SEC = 180;
 const AUTH_EXPIRATION_LEDGER_BUMP = 500;
@@ -146,4 +147,40 @@ export async function buildStellarBurnTx(params: {
     ),
   );
   return buildAndAssemble(server, account, operation);
+}
+
+/**
+ * Server-signed: submits `mint_and_forward` on the Stellar CctpForwarder for
+ * an onramp transfer. Atomic per Circle's docs — mints to the forwarder and
+ * pays the real recipient in one Soroban invocation, so there's no
+ * partial-mint-but-unforwarded state to handle.
+ */
+export async function submitMintAndForward(params: {
+  messageHex: string; // 0x-prefixed
+  attestationHex: string; // 0x-prefixed
+}): Promise<string> {
+  await assertStellarGasFloor();
+  const keypair = getCctpStellarAccount();
+  const server = new StellarSdk.rpc.Server(CCTP_CONFIG.stellarRpcUrl);
+  const account = await server.getAccount(keypair.publicKey());
+
+  const contract = new StellarSdk.Contract(CCTP_CONFIG.stellarCctpForwarder);
+  const operation = contract.call(
+    "mint_and_forward",
+    xdr.ScVal.scvBytes(Buffer.from(params.messageHex.replace(/^0x/i, ""), "hex")),
+    xdr.ScVal.scvBytes(Buffer.from(params.attestationHex.replace(/^0x/i, ""), "hex")),
+  );
+
+  const unsignedXdr = await buildAndAssemble(server, account, operation);
+  const tx = StellarSdk.TransactionBuilder.fromXDR(
+    unsignedXdr,
+    CCTP_CONFIG.stellarNetworkPassphrase,
+  ) as StellarSdk.Transaction;
+  tx.sign(keypair);
+
+  const sendResult = await server.sendTransaction(tx);
+  if (sendResult.status === "ERROR") {
+    throw new Error(`mint_and_forward send failed: ${JSON.stringify(sendResult)}`);
+  }
+  return sendResult.hash;
 }
