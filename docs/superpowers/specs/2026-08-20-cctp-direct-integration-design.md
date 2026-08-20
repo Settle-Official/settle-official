@@ -119,17 +119,56 @@ relay**, not a request-scoped timeout:
   Plus a pending-ids index so the relay tick doesn't scan all keys. Mirrors the existing
   crash-safety intent already documented in `onramp-store.ts`.
 
-- **Relay:** a Vercel Cron job hitting `/api/cctp/relay` roughly every minute. Each tick advances
-  every pending record one phase: poll attestation if waiting, submit mint if attested, confirm
-  mint if submitted. A failed/timed-out tick just gets retried next minute — no separate retry
-  logic needed beyond "leave it pending." Cron auth via a `CRON_SECRET`-checked Authorization
-  header, standard Vercel Cron practice.
+- **Relay mechanism — corrected during planning.** This project runs on Vercel's **Hobby plan**,
+  which restricts cron jobs to once per day (`vercel.json`'s existing `finalize-onramp` cron is
+  already on a daily schedule for exactly this reason). A minute-interval cron relay, as
+  originally scoped above, is not possible here. The codebase already has an established pattern
+  for this exact problem: `src/app/api/onramp/stream/[orderId]/route.ts` is a long-lived SSE
+  stream that actively drives the async bridge-completion step forward while the user's tab is
+  open (polling Redis every 3s, advancing the underlying transfer every 15s), with the daily cron
+  only as a backstop for abandoned sessions. This build follows the same pattern instead of a
+  from-scratch cron relay:
+  - One shared `advanceCctpTransfer(id)` function (in `cctp-adapter.ts` or a thin wrapper) does
+    the "poll attestation → submit mint → confirm" work for a single record — direction-agnostic,
+    calling into the Stellar or Base submitters based on `record.direction`.
+  - **Offramp:** a new SSE stream route drives `advanceCctpTransfer` forward while the result page
+    is open, same shape as the existing onramp stream, closing on `completed`/`failed`.
+  - **Onramp:** the *existing* SSE stream route is extended — during `bridging`, it calls
+    `advanceCctpTransfer` instead of (or alongside, during the cutover) the current Allbridge
+    `finalizeOnrampOrder` check.
+  - Both directions also register into the existing daily cron backstop (`listPendingBridges`-style
+    index, swept once a day) for sessions where the tab was closed before completion — same
+    dual-use pattern `finalizeOnrampOrder` already provides for onramp today.
 
 - **User-facing flow stays synchronous only for the burn step.** Offramp: build tx → Freighter
   signs → submit, same UX as today. Onramp: unchanged from the user's perspective — already
   custodial/webhook-triggered, no user action for the bridge leg either way. Completion is
   signaled the same way it already is today: Paycrest's webhook for offramp payout, existing
   onramp status polling for onramp — neither waits on the CCTP mint directly.
+
+## Funds ledger
+
+Separate from the operational `CctpTransferRecord` (which tracks in-flight bridge state and is
+allowed to be ephemeral), a permanent audit log of every fund movement that's real money touching
+a wallet we control — for reconciliation, not operational retry logic.
+
+- **New module:** `src/lib/ledger/funds-ledger.ts` — `FundsLedgerEntry { id, direction: "onramp" |
+  "offramp", wallet?: "base_hot_wallet" | "stellar_hot_wallet", chain, asset, amount, txHash,
+  orderId?, recordedAt }`. Stored in Redis with **no TTL** (deliberately different from the
+  operational records, which expire) — this is a financial record meant to accumulate, not
+  transient state.
+- **Onramp:** logged at the point we already treat as authoritative — `handleOnrampSettled` in
+  `src/lib/onramp/handle-settlement.ts`, right after the settled amount is confirmed and before
+  bridging starts. `wallet: "base_hot_wallet"`, real funds actually landing there (Paycrest's
+  settlement payout). `txHash` threaded through from the webhook's `data?.txHash`
+  (`src/app/api/webhooks/paycrest/route.ts`).
+- **Offramp:** per explicit product direction, offramp funds are **not** routed through our own
+  wallet (mint recipient stays Paycrest's `receiveAddress` directly, no added custody hop) — so
+  there's no wallet-deposit event to observe. Instead, log the transfer amount itself once the
+  CCTP burn is confirmed (`CctpTransferRecord` status flips to `burned`): `wallet: undefined`,
+  `chain: "stellar"`, the burned amount and burn tx hash, linked to the Paycrest order.
+- Read side is a basic `listLedgerEntries()` helper only — no admin UI being built as part of
+  this work (YAGNI; add one later if reconciliation tooling is actually needed).
 
 ## Offramp flow (Stellar → Base → Paycrest)
 
@@ -178,15 +217,16 @@ settlement mechanism, not bridging — out of scope). Only the bridging step cha
   permissions/monitoring later.
 - Iris API base URL as an env-overridable constant (mainnet default, testnet override), same
   override pattern already used for `ALLBRIDGE_NEXT_API_URL`.
-- `CRON_SECRET` for the relay route's Authorization check.
+- `CRON_SECRET` already exists (used by `finalize-onramp`) and is reused as-is for the extended
+  daily backstop — no new secret.
 
 ## Error handling
 
 - Burn-tx build/submit failures surface through existing error-handling paths (same shape as
   today's `build-tx` route try/catch).
-- Attestation/mint failures are the relay's problem, not the user's: a stuck record just stays
-  `attesting`/`attested` and gets retried next tick. `attempts`/`lastError` are tracked per
-  record for visibility.
+- Attestation/mint failures aren't the user's problem: a stuck record just stays
+  `attesting`/`attested` and gets retried on the next SSE tick (while the tab is open) or the next
+  daily cron sweep (backstop). `attempts`/`lastError` are tracked per record for visibility.
 - After a configurable attempt ceiling, mark the record `failed` and route into the **existing**
   Telegram alerting already built for offramp events (`db6a2fd`) rather than building new
   notification plumbing — a stuck CCTP transfer needs a human, and that channel already exists.
@@ -205,15 +245,19 @@ settlement mechanism, not bridging — out of scope). Only the bridging step cha
 ## Files touched
 
 **New:** `src/lib/cctp/cctp-adapter.ts`, `src/lib/cctp/cctp-store.ts`,
-`src/app/api/cctp/relay/route.ts` + cron config entry.
+`src/lib/ledger/funds-ledger.ts`, `src/app/api/offramp/bridge/stream/[transferId]/route.ts`
+(offramp's new SSE stream, mirroring the onramp one).
 
 **Changed:** `src/app/api/offramp/bridge/build-tx/route.ts`,
 `src/app/api/offramp/bridge/gas-fee-options/route.ts`,
 `src/app/api/offramp/bridge/status/[txHash]/route.ts`, `src/app/api/offramp/quote/route.ts`
 (offramp side, swap Allbridge Next calls for the CCTP adapter); `src/lib/onramp/base-bridge.ts`
 (swap Allbridge SDK calls for the CCTP adapter), `src/lib/onramp/onramp-store.ts` (extend record
-fields); `src/components/FormCard.tsx` (fee display simplification — one real fee, no
-USDC/XLM toggle).
+fields), `src/lib/onramp/handle-settlement.ts` (ledger write), `src/app/api/webhooks/paycrest/route.ts`
+(thread settlement `txHash` through), `src/app/api/onramp/stream/[orderId]/route.ts` (drive
+`advanceCctpTransfer` instead of Allbridge's finalizer during `bridging`),
+`src/app/api/cron/finalize-onramp/route.ts` (extend backstop sweep to CCTP transfers),
+`src/components/FormCard.tsx` (fee display simplification — one real fee, no USDC/XLM toggle).
 
 **Unchanged:** `src/app/api/offramp/bridge/submit-soroban/route.ts`, Paycrest order
 creation/webhook plumbing, wallet-signing UX, `allbridge-next-adapter.ts` /
