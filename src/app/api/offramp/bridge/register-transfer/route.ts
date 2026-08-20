@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { createCctpTransfer } from "@/lib/cctp/cctp-store";
 import { recordLedgerEntry } from "@/lib/ledger/funds-ledger";
 import { CCTP_DOMAIN } from "@/lib/cctp/constants";
-import { randomUUID } from "crypto";
 
 export async function POST(request: NextRequest) {
   try {
@@ -16,9 +15,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const id = randomUUID();
+    // The burn tx hash is already unique per transfer, and the client already
+    // has it (it's what pollBridgeStatus/the SSE stream key off) — using it
+    // as the record id avoids maintaining a second, separate identifier.
     const record = await createCctpTransfer({
-      id,
+      id: burnTxHash,
       direction: "offramp",
       sourceDomain: CCTP_DOMAIN.stellar,
       destDomain: CCTP_DOMAIN.base,

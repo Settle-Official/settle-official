@@ -15,7 +15,6 @@ export interface FormCardProps {
     amount: string;
     rate: number;
     token: string;
-    feePaymentMethod: "native" | "stablecoin";
     beneficiary: {
       institution: string;
       accountIdentifier: string;
@@ -34,8 +33,7 @@ export interface FormCardProps {
 }
 
 export interface GasFeeOptions {
-  native: { int: string; float: string };
-  stablecoin: { int: string; float: string };
+  fee: { int: string; float: string };
 }
 
 interface Bank {
@@ -114,19 +112,10 @@ export function FormCard({
   const [quote, setQuote] = useState<Quote | null>(null);
   const [isLoadingQuote, setIsLoadingQuote] = useState(false);
 
-  // Gas fee selection state
-  const [feePaymentMethod, setFeePaymentMethod] = useState<
-    "native" | "stablecoin"
-  >("native");
   const [gasFeeOptions, setGasFeeOptions] = useState<GasFeeOptions | null>(
     null,
   );
   const [isLoadingFees, setIsLoadingFees] = useState(false);
-  // Allbridge Next only offers a native-XLM relayer fee for this route today —
-  // no stablecoin option. Derived (not hardcoded) so it stays correct if that
-  // ever changes upstream.
-  const stablecoinFeeAvailable =
-    !!gasFeeOptions && parseFloat(gasFeeOptions.stablecoin.float) > 0;
 
   // Reset form fields when resetKey changes (after successful transaction)
   useEffect(() => {
@@ -263,7 +252,6 @@ export function FormCard({
               token: "USDC",
               currency,
               network: "base",
-              feePaymentMethod,
             }),
           });
           if (!response.ok) {
@@ -299,7 +287,7 @@ export function FormCard({
 
     const debounce = setTimeout(getQuote, 500);
     return () => clearTimeout(debounce);
-  }, [amount, currency, feePaymentMethod]);
+  }, [amount, currency]);
 
   useEffect(() => {
     onPricingUpdate?.({
@@ -340,7 +328,6 @@ export function FormCard({
       amount,
       rate: quote.rate,
       token: "USDC",
-      feePaymentMethod,
       beneficiary: {
         institution: bank,
         accountIdentifier: accountNumber,
@@ -387,105 +374,26 @@ export function FormCard({
                 : "Min 0.7 USDC"
           }
         />
-        {/* Gas Fee Token Selector */}
+        {/* Bridge fee — CCTP charges one real fee, deducted from the amount */}
         <div className="flex flex-col gap-[0.4rem]">
           <label className="text-[0.75rem] tracking-[0.08em] text-[var(--muted)]">
-            PAY GAS FEE WITH
+            BRIDGE FEE
           </label>
-          <div className="grid grid-cols-2 gap-[0.5rem]">
-            <button
-              type="button"
-              onClick={() => setFeePaymentMethod("stablecoin")}
-              disabled={isExecutingOfframp || !stablecoinFeeAvailable}
-              className={cn(
-                "flex flex-col items-start gap-[0.15rem] rounded-none border-2 px-[0.8rem] py-[0.55rem] text-left transition-colors",
-                feePaymentMethod === "stablecoin"
-                  ? "border-[var(--accent)] bg-[var(--accent)]/8"
-                  : "border-[#444] hover:border-[#666]",
-                (isExecutingOfframp || !stablecoinFeeAvailable) &&
-                  "cursor-not-allowed opacity-50",
-              )}
-            >
-              <span
-                className={cn(
-                  "text-[1.1rem] font-semibold",
-                  feePaymentMethod === "stablecoin"
-                    ? "text-[var(--accent)]"
-                    : "text-[var(--foreground)]",
-                )}
-              >
-                USDC
-              </span>
-              <span className="text-[0.85rem] text-[var(--muted)]">
-                {isLoadingFees
-                  ? "Loading..."
-                  : stablecoinFeeAvailable
-                    ? `~${parseFloat(gasFeeOptions!.stablecoin.float).toFixed(4)} USDC`
-                    : "Unavailable"}
-              </span>
-              <span className="text-[0.65rem] text-[var(--muted)] opacity-70">
-                {stablecoinFeeAvailable
-                  ? "Deducted from amount"
-                  : "USDC fee is currently unavailable"}
-              </span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setFeePaymentMethod("native")}
-              disabled={isExecutingOfframp}
-              className={cn(
-                "flex flex-col items-start gap-[0.15rem] rounded-none border-2 px-[0.8rem] py-[0.55rem] text-left transition-colors",
-                feePaymentMethod === "native"
-                  ? "border-[var(--accent)] bg-[var(--accent)]/8"
-                  : "border-[#444] hover:border-[#666]",
-                isExecutingOfframp && "cursor-not-allowed opacity-50",
-              )}
-            >
-              <span
-                className={cn(
-                  "text-[1.1rem] font-semibold",
-                  feePaymentMethod === "native"
-                    ? "text-[var(--accent)]"
-                    : "text-[var(--foreground)]",
-                )}
-              >
-                XLM
-              </span>
-              <span className="text-[0.85rem] text-[var(--muted)]">
-                {isLoadingFees
-                  ? "Loading..."
-                  : gasFeeOptions
-                    ? `~${parseFloat(gasFeeOptions.native.float).toFixed(4)} XLM`
-                    : "—"}
-              </span>
-              <span className="text-[0.65rem] text-[var(--muted)] opacity-70">
-                Paid separately in XLM
-              </span>
-            </button>
-          </div>
-          {feePaymentMethod === "stablecoin" &&
+          {isLoadingFees ? (
+            <p className="m-0 text-[0.8rem] text-[var(--muted)]">Loading...</p>
+          ) : (
             gasFeeOptions &&
             parseFloat(amount) > 0 && (
-              <p className="m-0 text-[0.8rem] text-yellow-500/80">
-                ⚠ {parseFloat(gasFeeOptions.stablecoin.float).toFixed(4)} USDC
-                bridge fee deducted — ~
+              <p className="m-0 text-[0.8rem] text-[var(--muted)]">
+                {parseFloat(gasFeeOptions.fee.float).toFixed(4)} USDC — ~
                 {Math.max(
                   0,
-                  parseFloat(amount) -
-                    parseFloat(gasFeeOptions.stablecoin.float),
+                  parseFloat(amount) - parseFloat(gasFeeOptions.fee.float),
                 ).toFixed(4)}{" "}
                 USDC bridged
               </p>
-            )}
-          {feePaymentMethod === "native" &&
-            gasFeeOptions &&
-            parseFloat(amount) > 0 && (
-              <p className="m-0 text-[0.8rem] text-blue-400/80">
-                ! Full {amount} USDC bridged —{" "}
-                {parseFloat(gasFeeOptions.native.float).toFixed(4)} XLM charged
-                separately
-              </p>
-            )}
+            )
+          )}
         </div>
         <div className="grid grid-cols-2 gap-[0.6rem] max-[720px]:grid-cols-1">
           <SelectField
@@ -537,13 +445,12 @@ export function FormCard({
               Est. time: {formatEstimatedTime(quote.estimatedTimeMs)}
               {" · "}Includes 1% platform fee
             </div>
-            {feePaymentMethod === "stablecoin" && gasFeeOptions && (
+            {gasFeeOptions && (
               <div className="text-[0.65rem] text-[var(--muted)] mt-0.5">
                 Bridged: ~
                 {Math.max(
                   0,
-                  parseFloat(amount) -
-                    parseFloat(gasFeeOptions.stablecoin.float),
+                  parseFloat(amount) - parseFloat(gasFeeOptions.fee.float),
                 ).toFixed(4)}{" "}
                 USDC → Base
               </div>

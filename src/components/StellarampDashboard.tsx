@@ -88,6 +88,67 @@ function formatSorobanError(payload: any): string {
   return [status, code, message, `raw=${raw}`].filter(Boolean).join(" | ");
 }
 
+/**
+ * Submit a signed Soroban XDR via the server route and wait for confirmation,
+ * polling the lightweight tx-status endpoint on PENDING. Extracted so CCTP's
+ * approve-then-burn flow can run this exact sequence twice instead of once.
+ */
+async function submitAndConfirmSoroban(signedXdr: string): Promise<string> {
+  const submitAbort = new AbortController();
+  const submitTimer = setTimeout(() => submitAbort.abort(), 15_000);
+  let submitResponse: Response;
+  try {
+    submitResponse = await fetch("/api/offramp/bridge/submit-soroban", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: submitAbort.signal,
+      body: JSON.stringify({ signedXdr }),
+    });
+  } catch (fetchErr: any) {
+    if (fetchErr?.name === "AbortError") {
+      throw new Error("Submit transaction timed out (15s). Please try again.");
+    }
+    throw new Error(`Submit transaction network error: ${fetchErr.message}`);
+  } finally {
+    clearTimeout(submitTimer);
+  }
+
+  const submitPayload = await submitResponse.json().catch(() => ({}));
+  if (!submitResponse.ok) {
+    throw new Error(
+      submitPayload?.error ||
+        `Soroban transaction error: ${formatSorobanError(submitPayload?.details || submitPayload)}`,
+    );
+  }
+  if (!submitPayload?.hash) {
+    throw new Error(`Soroban submit missing hash: ${safeJson(submitPayload)}`);
+  }
+
+  const txHash: string = submitPayload.hash;
+  if (submitPayload.status === "SUCCESS") return txHash;
+  if (submitPayload.status !== "PENDING") {
+    throw new Error(
+      `Transaction not confirmed (status: ${submitPayload?.status}). ` +
+        (submitPayload?.error || "Please try again."),
+    );
+  }
+
+  const maxPollAttempts = 30; // 30 × 3s = 90s
+  for (let i = 0; i < maxPollAttempts; i++) {
+    await new Promise((r) => setTimeout(r, 3000));
+    const statusRes = await fetch(`/api/offramp/bridge/tx-status/${txHash}`);
+    const statusData = await statusRes.json().catch(() => ({}));
+    if (statusData?.status === "SUCCESS") return txHash;
+    if (statusData?.status === "FAILED") {
+      throw new Error("Transaction failed on-chain. Your wallet was not debited.");
+    }
+    // NOT_FOUND — keep polling
+  }
+  throw new Error(
+    "Transaction was not confirmed within 90s. It may have expired. Your wallet was likely not debited.",
+  );
+}
+
 export function StellarampDashboard() {
   const {
     wallet,
@@ -280,7 +341,6 @@ export function StellarampDashboard() {
     amount: string;
     rate: number;
     token: string;
-    feePaymentMethod?: "native" | "stablecoin";
     beneficiary: {
       institution: string;
       accountIdentifier: string;
@@ -307,33 +367,33 @@ export function StellarampDashboard() {
       return;
     }
 
-    // Pre-flight: if paying gas in XLM, check XLM balance vs the real bridge
-    // fee (from Allbridge Next) + this account's actual minimum balance
-    // requirement. No guessing here — a stale hardcoded estimate previously
-    // showed the wrong number and let people attempt a transaction that was
-    // always going to fail.
-    if (tradeData.feePaymentMethod === "native") {
-      const nativeFeeFloat = pricingState.gasFeeOptions?.native.float;
-      if (nativeFeeFloat === undefined || stellarSubentryCount === null) {
-        setToastError(
-          "Still loading fee and account data — please wait a moment and try again.",
-        );
-        return;
-      }
-      const realGasFee = parseFloat(nativeFeeFloat);
-      // Stellar's base reserve (0.5 XLM per subentry, 2 base reserves
-      // minimum) has been a stable, unchanged network parameter for years.
-      const STELLAR_BASE_RESERVE_XLM = 0.5;
-      const minReserve =
-        (2 + stellarSubentryCount) * STELLAR_BASE_RESERVE_XLM;
-      const xlmBal = parseFloat((stellarXlmBalance ?? "0").replace(/,/g, ""));
-      const needed = minReserve + realGasFee;
-      if (xlmBal < needed) {
-        setToastError(
-          `Insufficient XLM for native gas fee. You have ${xlmBal.toFixed(2)} XLM but need ~${needed.toFixed(2)} XLM (${realGasFee.toFixed(4)} gas + ${minReserve.toFixed(1)} account reserve). Switch to USDC fee payment or add more XLM.`,
-        );
-        return;
-      }
+    // Pre-flight: every CCTP offramp submits at least one Soroban transaction
+    // (the burn — plus an approve tx the first time, or after allowance is
+    // exhausted), always paid in XLM as Stellar's own network fee. Unlike the
+    // old Allbridge relayer fee, there's no separate bridge-side XLM charge
+    // to quote in advance — the bridge fee is always USDC, deducted from the
+    // amount (shown above). This check only needs to cover Stellar's real
+    // account reserve plus a conservative buffer for network fees.
+    if (stellarSubentryCount === null) {
+      setToastError(
+        "Still loading account data — please wait a moment and try again.",
+      );
+      return;
+    }
+    // Stellar's base reserve (0.5 XLM per subentry, 2 base reserves minimum)
+    // has been a stable, unchanged network parameter for years.
+    const STELLAR_BASE_RESERVE_XLM = 0.5;
+    const minReserve = (2 + stellarSubentryCount) * STELLAR_BASE_RESERVE_XLM;
+    // Soroban resource fees are typically a small fraction of an XLM; this
+    // covers an approve tx + a burn tx with comfortable headroom.
+    const NETWORK_FEE_BUFFER_XLM = 0.5;
+    const xlmBal = parseFloat((stellarXlmBalance ?? "0").replace(/,/g, ""));
+    const needed = minReserve + NETWORK_FEE_BUFFER_XLM;
+    if (xlmBal < needed) {
+      setToastError(
+        `Insufficient XLM. You have ${xlmBal.toFixed(2)} XLM but need ~${needed.toFixed(2)} XLM (${minReserve.toFixed(1)} account reserve + network fees). Add more XLM to your wallet.`,
+      );
+      return;
     }
 
     const baseReturnAddress = process.env.NEXT_PUBLIC_BASE_RETURN_ADDRESS;
@@ -460,55 +520,62 @@ export function StellarampDashboard() {
       });
       setUserTransactions(TransactionStorage.getByUser(wallet.publicKey));
 
-      // 3) Build Allbridge tx to Paycrest settlement wallet (server route to avoid client RPC issues)
-      const buildAbort = new AbortController();
-      const buildTimer = setTimeout(() => buildAbort.abort(), 30_000);
-      let buildTxResponse: Response;
-      try {
-        buildTxResponse = await fetch("/api/offramp/bridge/build-tx", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          signal: buildAbort.signal,
-          body: JSON.stringify({
-            amount: tradeData.amount,
-            fromAddress: wallet.publicKey,
-            toAddress: settlementAddress,
-            feePaymentMethod: tradeData.feePaymentMethod || "stablecoin",
-          }),
-        });
-      } catch (fetchErr: any) {
-        if (fetchErr?.name === "AbortError") {
-          throw new Error(
-            "Build transaction timed out (30s). Please try again.",
-          );
+      // 3) Build CCTP burn tx to Paycrest settlement wallet (server route to
+      // avoid client RPC issues) — may require an approve step first.
+      const buildBurnTxPayload = async () => {
+        const buildAbort = new AbortController();
+        const buildTimer = setTimeout(() => buildAbort.abort(), 30_000);
+        try {
+          const res = await fetch("/api/offramp/bridge/build-tx", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            signal: buildAbort.signal,
+            body: JSON.stringify({
+              amount: tradeData.amount,
+              fromAddress: wallet.publicKey,
+              toAddress: settlementAddress,
+            }),
+          });
+          if (!res.ok) {
+            const payload = await res.json().catch(() => ({}));
+            throw new Error(
+              payload?.error || `Failed to build bridge transaction: ${res.status}`,
+            );
+          }
+          return res.json();
+        } catch (fetchErr: any) {
+          if (fetchErr?.name === "AbortError") {
+            throw new Error("Build transaction timed out (30s). Please try again.");
+          }
+          throw fetchErr;
+        } finally {
+          clearTimeout(buildTimer);
         }
-        throw new Error(`Build transaction network error: ${fetchErr.message}`);
-      } finally {
-        clearTimeout(buildTimer);
+      };
+
+      let buildTxPayload = await buildBurnTxPayload();
+
+      if (buildTxPayload.needsApproval) {
+        setOfframpStep("awaiting-signature");
+        const signedApprove = await signTransaction(buildTxPayload.approveXdr);
+        setOfframpStep("submitting");
+        await submitAndConfirmSoroban(signedApprove);
+
+        // Re-request now that allowance is sufficient.
+        buildTxPayload = await buildBurnTxPayload();
       }
-      if (!buildTxResponse.ok) {
-        const payload = await buildTxResponse.json().catch(() => ({}));
-        throw new Error(
-          payload?.error ||
-            `Failed to build bridge transaction: ${buildTxResponse.status}`,
-        );
-      }
-      const buildTxPayload = await buildTxResponse.json();
+
       const xdr: string | undefined = buildTxPayload?.xdr;
       if (!xdr) {
         throw new Error("Bridge transaction payload missing XDR");
       }
 
-      // 4) Sign transaction with wallet
+      // 4) Sign and submit the burn
       setOfframpStep("awaiting-signature");
       const signedXdr = await signTransaction(xdr);
-
-      // 5) Submit to Stellar network
       setOfframpStep("submitting");
-            let stellarTxHash: string;
 
-      // Detect Soroban ops safely – default to Soroban path since Allbridge
-      // bridge txs are always invokeHostFunction.
+      let stellarTxHash: string;
       let hasSorobanOps = true;
       let signedTx:
         | StellarSdk.Transaction
@@ -528,87 +595,7 @@ export function StellarampDashboard() {
               }
 
       if (hasSorobanOps) {
-        // Submit via server route which forwards raw XDR to the Soroban RPC
-        // (no SDK re-serialisation – avoids stellar-base version mismatch).
-        const submitAbort = new AbortController();
-        const submitTimer = setTimeout(() => submitAbort.abort(), 15_000);
-        let submitResponse: Response;
-        try {
-          submitResponse = await fetch("/api/offramp/bridge/submit-soroban", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            signal: submitAbort.signal,
-            body: JSON.stringify({ signedXdr }),
-          });
-        } catch (fetchErr: any) {
-          if (fetchErr?.name === "AbortError") {
-            throw new Error(
-              "Submit transaction timed out (15s). Please try again.",
-            );
-          }
-          throw new Error(
-            `Submit transaction network error: ${fetchErr.message}`,
-          );
-        } finally {
-          clearTimeout(submitTimer);
-        }
-        const submitPayload = await submitResponse.json().catch(() => ({}));
-                if (!submitResponse.ok) {
-          throw new Error(
-            submitPayload?.error ||
-              `Soroban transaction error: ${formatSorobanError(
-                submitPayload?.details || submitPayload,
-              )}`,
-          );
-        }
-        if (!submitPayload?.hash) {
-          throw new Error(
-            `Soroban submit missing hash: ${safeJson(submitPayload)}`,
-          );
-        }
-
-        stellarTxHash = submitPayload.hash;
-
-        // If PENDING, poll the lightweight tx-status endpoint from the client
-        // instead of relying on server-side polling (avoids Vercel timeout).
-        if (submitPayload?.status === "PENDING") {
-                    const maxPollAttempts = 30; // 30 × 3s = 90s
-          let confirmed = false;
-
-          for (let i = 0; i < maxPollAttempts; i++) {
-            await new Promise((r) => setTimeout(r, 3000));
-            try {
-              const statusRes = await fetch(
-                `/api/offramp/bridge/tx-status/${stellarTxHash}`,
-              );
-              const statusData = await statusRes.json().catch(() => ({}));
-              
-              if (statusData?.status === "SUCCESS") {
-                confirmed = true;
-                break;
-              }
-              if (statusData?.status === "FAILED") {
-                throw new Error(
-                  "Transaction failed on-chain. Your wallet was not debited.",
-                );
-              }
-              // NOT_FOUND — keep polling
-            } catch (pollErr: any) {
-              if (pollErr?.message?.includes("failed on-chain")) throw pollErr;
-                          }
-          }
-
-          if (!confirmed) {
-            throw new Error(
-              "Transaction was not confirmed within 90s. It may have expired. Your wallet was likely not debited.",
-            );
-          }
-        } else if (submitPayload?.status !== "SUCCESS") {
-          throw new Error(
-            `Transaction not confirmed (status: ${submitPayload?.status}). ` +
-              (submitPayload?.error || "Please try again."),
-          );
-        }
+        stellarTxHash = await submitAndConfirmSoroban(signedXdr);
       } else if (signedTx) {
         // Classic tx path
         const server = new StellarSdk.Horizon.Server(
@@ -625,6 +612,23 @@ export function StellarampDashboard() {
         stellarTxHash,
         bridgeStatus: "pending",
       }));
+
+      // 5) Register the transfer (creates the CctpTransferRecord + ledger
+      // entry) and open the SSE stream so attest-to-mint is driven forward
+      // while this tab is open. Fire-and-forget from the UI's perspective —
+      // Paycrest's payout webhook remains the real completion signal below;
+      // this is only for our own operational tracking.
+      await fetch("/api/offramp/bridge/register-transfer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          burnTxHash: stellarTxHash,
+          mintRecipient: settlementAddress,
+          amount: tradeData.amount,
+          paycrestOrderId: payoutOrderId,
+        }),
+      }).catch(() => {});
+      new EventSource(`/api/offramp/bridge/stream/${stellarTxHash}`);
 
       // Update transaction with tx hash
       TransactionStorage.update(txId, {
