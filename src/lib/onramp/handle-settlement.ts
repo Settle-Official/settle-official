@@ -16,6 +16,7 @@ import {
 } from "./onramp-store";
 import { bridgeUsdcBaseToStellar, BridgeGasError } from "./base-bridge";
 import { notify, alertManualAction } from "@/lib/notify/telegram";
+import { recordLedgerEntry } from "@/lib/ledger/funds-ledger";
 
 /**
  * Trigger the bridge for a settled onramp order. Safe to call multiple times
@@ -24,6 +25,7 @@ import { notify, alertManualAction } from "@/lib/notify/telegram";
 export async function handleOnrampSettled(
   orderId: string,
   settledAmount?: string,
+  settlementTxHash?: string,
 ): Promise<void> {
   const record = await getOnrampOrder(orderId);
   if (!record) {
@@ -65,6 +67,16 @@ export async function handleOnrampSettled(
     });
     return;
   }
+
+  await recordLedgerEntry({
+    direction: "onramp",
+    wallet: "base_hot_wallet",
+    chain: "base",
+    asset: "USDC",
+    amount,
+    txHash: settlementTxHash || "unknown",
+    orderId,
+  });
 
   try {
     await updateOnrampOrder(orderId, {
