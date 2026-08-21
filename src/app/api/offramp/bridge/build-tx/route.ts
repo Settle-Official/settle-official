@@ -70,6 +70,14 @@ export async function POST(request: NextRequest) {
       userMessage =
         "A token transfer in the bridge contract failed during simulation. " +
         "This usually means insufficient balance for the amount + fees.";
+    } else if (/Allbridge Next API \/tx\/create failed: 5\d\d/.test(msg)) {
+      // A 5xx from Allbridge Next's own /tx/create means their bridge
+      // backend is failing to build the transaction, not a problem with our
+      // request — surface a friendly retry message instead of their raw
+      // upstream error text.
+      userMessage =
+        "The bridge provider is temporarily unable to process this route. " +
+        "This is an issue on Allbridge's side — please try again in a few minutes.";
     }
 
     return NextResponse.json(
