@@ -1,4 +1,10 @@
-import { getCctpTransfer, updateCctpTransfer, type CctpStatus } from "./cctp-store";
+import {
+  getCctpTransfer,
+  updateCctpTransfer,
+  acquireAdvanceLock,
+  releaseAdvanceLock,
+  type CctpStatus,
+} from "./cctp-store";
 import { fetchAttestation, reattest } from "./iris-client";
 import { submitBaseMint } from "./base-cctp";
 import { submitMintAndForward } from "./stellar-cctp";
@@ -6,11 +12,19 @@ import { submitMintAndForward } from "./stellar-cctp";
 const MAX_ATTEMPTS = 20;
 
 /**
- * Advances one CCTP transfer by whatever it's currently waiting on. Safe to
- * call repeatedly/concurrently for the same id — each step is a Redis
- * read-modify-write, and re-submitting a mint for an already-processed nonce
- * fails harmlessly onchain (CCTP nonces are single-use) rather than
- * double-minting.
+ * Advances one CCTP transfer by whatever it's currently waiting on.
+ *
+ * Single-flight per transfer id: this is called from multiple independent
+ * triggers (an SSE tick loop, the daily cron sweep, a manual status check),
+ * and the SSE tick loop in particular can end up running more than one
+ * instance concurrently — EventSource auto-reconnects on any drop, and each
+ * reconnect spins up its own server-side stream with its own tick timer, all
+ * polling the same transfer. Without a lock, two overlapping calls can both
+ * read "attested" before either writes, both submit a mint, and the loser's
+ * failure (a correctly-rejected duplicate — CCTP nonces are single-use) can
+ * race the winner's success. A caller that doesn't get the lock just returns
+ * the current persisted status and does no work; whichever call holds the
+ * lock will finish and update the record, and the next tick picks it up.
  */
 export async function advanceCctpTransfer(id: string): Promise<CctpStatus> {
   const record = await getCctpTransfer(id);
@@ -19,6 +33,22 @@ export async function advanceCctpTransfer(id: string): Promise<CctpStatus> {
     return record.status;
   }
 
+  const gotLock = await acquireAdvanceLock(id);
+  if (!gotLock) {
+    return record.status;
+  }
+
+  try {
+    return await advanceLocked(id, record);
+  } finally {
+    await releaseAdvanceLock(id);
+  }
+}
+
+async function advanceLocked(
+  id: string,
+  record: NonNullable<Awaited<ReturnType<typeof getCctpTransfer>>>,
+): Promise<CctpStatus> {
   try {
     if (record.status === "burned" || record.status === "attesting") {
       const attestation = await fetchAttestation({

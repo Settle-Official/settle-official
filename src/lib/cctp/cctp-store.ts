@@ -8,6 +8,10 @@ const redis = new Redis({
 const TTL_SECONDS = 7 * 24 * 60 * 60;
 const key = (id: string) => `cctp:transfer:${id}`;
 const PENDING_KEY = "cctp:pending-transfers";
+const ADVANCE_LOCK_KEY = (id: string) => `cctp:advance-lock:${id}`;
+// Long enough to cover a mint submit + receipt wait on a slow RPC; short
+// enough that a crashed process doesn't wedge a transfer indefinitely.
+const ADVANCE_LOCK_TTL_SECONDS = 90;
 
 export type CctpStatus =
   | "burned"
@@ -58,6 +62,31 @@ export async function getCctpTransfer(id: string): Promise<CctpTransferRecord | 
   return (await redis.get<CctpTransferRecord>(key(id))) ?? null;
 }
 
+/**
+ * Merge a patch onto the existing record. Terminal records (completed/failed)
+ * are frozen — once a transfer reaches a final state, no later write can
+ * regress it. This is the guard that was missing when a stale, racing
+ * "attested" read's failure write overwrote an already-successful "minting"
+ * status; the accompanying advance lock (see acquireAdvanceLock) closes the
+ * race itself, this is the belt-and-suspenders backstop in case two advances
+ * ever run concurrently anyway (e.g. the lock expired mid-flight).
+ */
+export function mergeCctpTransfer(
+  existing: CctpTransferRecord,
+  patch: Partial<Omit<CctpTransferRecord, "id" | "createdAt">>,
+): CctpTransferRecord {
+  if (existing.status === "completed" || existing.status === "failed") {
+    return existing;
+  }
+  return {
+    ...existing,
+    ...patch,
+    id: existing.id,
+    createdAt: existing.createdAt,
+    updatedAt: Date.now(),
+  };
+}
+
 export async function updateCctpTransfer(
   id: string,
   patch: Partial<Omit<CctpTransferRecord, "id" | "createdAt">>,
@@ -65,18 +94,31 @@ export async function updateCctpTransfer(
   const existing = await getCctpTransfer(id);
   if (!existing) return null;
 
-  const merged: CctpTransferRecord = {
-    ...existing,
-    ...patch,
-    id: existing.id,
-    createdAt: existing.createdAt,
-    updatedAt: Date.now(),
-  };
+  const merged = mergeCctpTransfer(existing, patch);
   await redis.set(key(id), merged, { ex: TTL_SECONDS });
   if (merged.status === "completed" || merged.status === "failed") {
     await removePendingTransfer(id);
   }
   return merged;
+}
+
+/**
+ * Single-flight lock so only one advanceCctpTransfer call is ever actively
+ * working a given transfer at a time. A caller that fails to acquire it
+ * should just read the current status and do nothing — whichever call holds
+ * the lock will finish and update the record; the next tick picks it up.
+ * Auto-expires so a crashed/timed-out process can't wedge a transfer.
+ */
+export async function acquireAdvanceLock(id: string): Promise<boolean> {
+  const result = await redis.set(ADVANCE_LOCK_KEY(id), "1", {
+    nx: true,
+    ex: ADVANCE_LOCK_TTL_SECONDS,
+  });
+  return result === "OK";
+}
+
+export async function releaseAdvanceLock(id: string): Promise<void> {
+  await redis.del(ADVANCE_LOCK_KEY(id));
 }
 
 export async function addPendingTransfer(id: string): Promise<void> {
