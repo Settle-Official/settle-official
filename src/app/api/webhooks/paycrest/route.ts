@@ -151,7 +151,7 @@ export async function POST(request: NextRequest) {
       if (status === "settled") {
         // Bridge inline. handleOnrampSettled is lock-guarded and hold-and-alert
         // on failure, so it's safe under Paycrest's retries.
-        await handleOnrampSettled(orderId, data?.amount);
+        await handleOnrampSettled(orderId, data?.amount, data?.txHash);
       }
 
       return NextResponse.json({ success: true });

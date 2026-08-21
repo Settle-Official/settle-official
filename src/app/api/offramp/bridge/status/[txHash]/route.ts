@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getNextTransferStatus } from "@/lib/offramp/adapters/allbridge-next-adapter";
+import { getCctpTransfer } from "@/lib/cctp/cctp-store";
 
 export async function GET(
   request: NextRequest,
@@ -14,9 +14,20 @@ export async function GET(
     );
   }
 
-  // getNextTransferStatus never throws — it resolves to "pending" on any
-  // lookup failure, since this polling is best-effort and doesn't gate
-  // completion (Paycrest's own payout detection is the real success signal).
-  const status = await getNextTransferStatus(txHash);
-  return NextResponse.json({ data: status });
+  // CctpTransferRecord.id is the burn tx hash itself (see register-transfer),
+  // so this is a direct lookup. Best-effort, same as the Allbridge-era
+  // version it replaces — doesn't gate completion (Paycrest's own payout
+  // detection is the real success signal); an unknown/not-yet-registered
+  // hash just reports "pending" rather than erroring.
+  const record = await getCctpTransfer(txHash);
+  const status =
+    !record
+      ? "pending"
+      : record.status === "completed"
+        ? "completed"
+        : record.status === "failed"
+          ? "failed"
+          : "pending";
+
+  return NextResponse.json({ data: { status, txHash } });
 }

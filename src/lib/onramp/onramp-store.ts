@@ -34,8 +34,9 @@ export interface OnrampRecord {
   refundAccountName?: string;
   rate?: number;
   baseUsdcAmount?: string; // amount that landed in the hot wallet
-  bridgeTxHash?: string; // Base-side Allbridge tx
+  bridgeTxHash?: string; // Base-side CCTP burn tx
   stellarTxHash?: string; // Stellar delivery tx (if known)
+  cctpTransferId?: string; // links to the CctpTransferRecord driving delivery
   failureReason?: string;
   bridgeStartedAt?: number; // when the Base→Stellar bridge was broadcast
   staleAlerted?: boolean; // finalizer already sent the "slow to confirm" alert
