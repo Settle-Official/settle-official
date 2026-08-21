@@ -1,0 +1,134 @@
+import { Redis } from "@upstash/redis";
+
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL!,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+});
+
+const TTL_SECONDS = 7 * 24 * 60 * 60;
+const key = (id: string) => `cctp:transfer:${id}`;
+const PENDING_KEY = "cctp:pending-transfers";
+const ADVANCE_LOCK_KEY = (id: string) => `cctp:advance-lock:${id}`;
+// Long enough to cover a mint submit + receipt wait on a slow RPC; short
+// enough that a crashed process doesn't wedge a transfer indefinitely.
+const ADVANCE_LOCK_TTL_SECONDS = 90;
+
+export type CctpStatus =
+  | "burned"
+  | "attesting"
+  | "attested"
+  | "minting"
+  | "completed"
+  | "failed";
+
+export const STATUS_RANK: Record<CctpStatus, number> = {
+  burned: 0,
+  attesting: 1,
+  attested: 2,
+  minting: 3,
+  completed: 4,
+  failed: 4, // terminal, same rank as completed — either ends progression
+};
+
+export interface CctpTransferRecord {
+  id: string;
+  direction: "offramp" | "onramp";
+  sourceDomain: number;
+  destDomain: number;
+  burnTxHash: string;
+  mintRecipient: string;
+  status: CctpStatus;
+  attestationMessage?: string;
+  attestationSignature?: string;
+  mintTxHash?: string;
+  attempts: number;
+  lastError?: string;
+  createdAt: number;
+  updatedAt: number;
+  paycrestOrderId?: string;
+}
+
+export async function createCctpTransfer(
+  record: Omit<CctpTransferRecord, "createdAt" | "updatedAt" | "attempts">,
+): Promise<CctpTransferRecord> {
+  const now = Date.now();
+  const full: CctpTransferRecord = { ...record, attempts: 0, createdAt: now, updatedAt: now };
+  await redis.set(key(record.id), full, { ex: TTL_SECONDS });
+  await addPendingTransfer(record.id);
+  return full;
+}
+
+export async function getCctpTransfer(id: string): Promise<CctpTransferRecord | null> {
+  return (await redis.get<CctpTransferRecord>(key(id))) ?? null;
+}
+
+/**
+ * Merge a patch onto the existing record. Terminal records (completed/failed)
+ * are frozen — once a transfer reaches a final state, no later write can
+ * regress it. This is the guard that was missing when a stale, racing
+ * "attested" read's failure write overwrote an already-successful "minting"
+ * status; the accompanying advance lock (see acquireAdvanceLock) closes the
+ * race itself, this is the belt-and-suspenders backstop in case two advances
+ * ever run concurrently anyway (e.g. the lock expired mid-flight).
+ */
+export function mergeCctpTransfer(
+  existing: CctpTransferRecord,
+  patch: Partial<Omit<CctpTransferRecord, "id" | "createdAt">>,
+): CctpTransferRecord {
+  if (existing.status === "completed" || existing.status === "failed") {
+    return existing;
+  }
+  return {
+    ...existing,
+    ...patch,
+    id: existing.id,
+    createdAt: existing.createdAt,
+    updatedAt: Date.now(),
+  };
+}
+
+export async function updateCctpTransfer(
+  id: string,
+  patch: Partial<Omit<CctpTransferRecord, "id" | "createdAt">>,
+): Promise<CctpTransferRecord | null> {
+  const existing = await getCctpTransfer(id);
+  if (!existing) return null;
+
+  const merged = mergeCctpTransfer(existing, patch);
+  await redis.set(key(id), merged, { ex: TTL_SECONDS });
+  if (merged.status === "completed" || merged.status === "failed") {
+    await removePendingTransfer(id);
+  }
+  return merged;
+}
+
+/**
+ * Single-flight lock so only one advanceCctpTransfer call is ever actively
+ * working a given transfer at a time. A caller that fails to acquire it
+ * should just read the current status and do nothing — whichever call holds
+ * the lock will finish and update the record; the next tick picks it up.
+ * Auto-expires so a crashed/timed-out process can't wedge a transfer.
+ */
+export async function acquireAdvanceLock(id: string): Promise<boolean> {
+  const result = await redis.set(ADVANCE_LOCK_KEY(id), "1", {
+    nx: true,
+    ex: ADVANCE_LOCK_TTL_SECONDS,
+  });
+  return result === "OK";
+}
+
+export async function releaseAdvanceLock(id: string): Promise<void> {
+  await redis.del(ADVANCE_LOCK_KEY(id));
+}
+
+export async function addPendingTransfer(id: string): Promise<void> {
+  await redis.sadd(PENDING_KEY, id);
+}
+
+export async function removePendingTransfer(id: string): Promise<void> {
+  await redis.srem(PENDING_KEY, id);
+}
+
+export async function listPendingTransfers(): Promise<string[]> {
+  return (await redis.smembers(PENDING_KEY)) ?? [];
+}

@@ -150,7 +150,12 @@ export async function createNextBridgeTx(params: {
   const { relayerFees, ...quoteRest } = quote;
   const wantedTokenId = feePaymentMethod === "native" ? "native" : quote.sourceTokenId;
   const relayerFee = relayerFees.find((f) => f.tokenId === wantedTokenId);
-  if (!relayerFee) {
+  // Some messengers (e.g. near-intents) charge their fee via the quote's
+  // amountOut spread instead of a separate relayer fee, and return an empty
+  // relayerFees array entirely — that's not an error, just "none needed".
+  // Only treat a missing match as fatal when the route *does* offer relayer
+  // fee options but not the one the caller asked for.
+  if (relayerFees.length > 0 && !relayerFee) {
     throw new Error(
       `Allbridge Next did not return a "${feePaymentMethod}" relayer fee option for this route`,
     );
@@ -161,7 +166,13 @@ export async function createNextBridgeTx(params: {
     amount: floatToInt(amountFloat, STELLAR_USDC_DECIMALS),
     sourceAddress,
     destinationAddress,
-    relayerFee,
+    // The near-intents messenger refunds the sender on the source chain if
+    // the swap can't complete, and requires that address explicitly —
+    // omitting it fails validation with "invalid_refund_to". Confirmed by
+    // probing /tx/create directly: without this field every request (even
+    // with a valid, funded source address) is rejected the same way.
+    refundTo: sourceAddress,
+    ...(relayerFee ? { relayerFee } : {}),
   };
 
   const result = await nextApiFetch<NextBridgeTxResult>("/tx/create", {

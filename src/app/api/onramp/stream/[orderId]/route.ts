@@ -1,19 +1,19 @@
 import { NextRequest } from "next/server";
 import {
   getOnrampOrder,
+  updateOnrampOrder,
   isTerminal,
   type OnrampRecord,
 } from "@/lib/onramp/onramp-store";
-import { finalizeOnrampOrder } from "@/lib/onramp/finalize";
-import { initializeAllbridgeSdk } from "@/lib/offramp/adapters/allbridge-adapter";
+import { getCctpTransfer } from "@/lib/cctp/cctp-store";
+import { advanceCctpTransfer } from "@/lib/cctp/advance";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const POLL_MS = 3000;
-// Check the Allbridge transfer at most this often while bridging. Much slower
-// than the Redis read so we don't hammer the bridge API or re-init the SDK too
-// eagerly.
+// Check the CCTP transfer at most this often while bridging. Much slower
+// than the Redis read so we don't hammer Iris/RPCs too eagerly.
 const BRIDGE_CHECK_MS = 15000;
 
 /**
@@ -21,10 +21,10 @@ const BRIDGE_CHECK_MS = 15000;
  * by the order route, webhook, and bridge handler) and pushes on change.
  *
  * While the order is `bridging`, this also drives delivery confirmation: it
- * calls the shared finalizer (checks Allbridge → flips delivered/failed) on a
- * slow cadence. On Vercel Hobby the cron only runs daily, so this open-tab path
- * is what confirms delivery promptly. The finalizer is idempotent and shared
- * with the cron, so both racing is harmless.
+ * advances the order's CCTP transfer (attest → mint-and-forward on Stellar)
+ * on a slow cadence. On Vercel Hobby the cron only runs daily, so this
+ * open-tab path is what confirms delivery promptly. advanceCctpTransfer is
+ * idempotent and shared with the cron sweep, so both racing is harmless.
  *
  * Closes on a terminal state (delivered / refunded / expired). EventSource
  * auto-reconnects across the Vercel timeout; each connect re-reads Redis, so no
@@ -43,8 +43,6 @@ export async function GET(
       let closed = false;
       let lastSerialized = "";
       let lastBridgeCheck = 0;
-      // Lazily initialized the first time we actually need to check the bridge.
-      let sdkPromise: Promise<any> | null = null;
 
       const send = (record: OnrampRecord) => {
         // Only surface fields the client needs; omit stored PII.
@@ -79,29 +77,42 @@ export async function GET(
           const record = await getOnrampOrder(orderId);
           if (!record) return;
 
-          // Drive delivery confirmation while bridging (throttled). The
-          // finalizer writes to Redis; this same loop then pushes the change.
+          // Drive delivery confirmation while bridging (throttled). advance
+          // writes to the CCTP record; on completion this flips the onramp
+          // order itself, and the next read below picks up the change.
           if (
             record.status === "bridging" &&
+            record.cctpTransferId &&
             Date.now() - lastBridgeCheck > BRIDGE_CHECK_MS
           ) {
             lastBridgeCheck = Date.now();
             try {
-              if (!sdkPromise) sdkPromise = initializeAllbridgeSdk();
-              const sdk = await sdkPromise;
-              await finalizeOnrampOrder(sdk, orderId);
+              const cctpStatus = await advanceCctpTransfer(record.cctpTransferId);
+              if (cctpStatus === "completed") {
+                const transfer = await getCctpTransfer(record.cctpTransferId);
+                await updateOnrampOrder(orderId, {
+                  status: "delivered",
+                  stellarTxHash: transfer?.mintTxHash,
+                });
+              } else if (cctpStatus === "failed") {
+                await updateOnrampOrder(orderId, {
+                  status: "bridge_failed",
+                  failureReason: "CCTP transfer failed after max retries",
+                });
+              }
             } catch {
-              // Bridge check failed this round — retry on the next interval.
+              // Advance failed this round — retry next interval.
             }
           }
 
-          const serialized = JSON.stringify(record);
+          const latest = (await getOnrampOrder(orderId)) ?? record;
+          const serialized = JSON.stringify(latest);
           if (serialized !== lastSerialized) {
             lastSerialized = serialized;
-            send(record);
+            send(latest);
           }
 
-          if (isTerminal(record.status)) {
+          if (isTerminal(latest.status)) {
             close();
           }
         } catch {

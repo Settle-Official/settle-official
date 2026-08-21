@@ -16,6 +16,7 @@ import {
 } from "./onramp-store";
 import { bridgeUsdcBaseToStellar, BridgeGasError } from "./base-bridge";
 import { notify, alertManualAction } from "@/lib/notify/telegram";
+import { recordLedgerEntry } from "@/lib/ledger/funds-ledger";
 
 /**
  * Trigger the bridge for a settled onramp order. Safe to call multiple times
@@ -24,6 +25,7 @@ import { notify, alertManualAction } from "@/lib/notify/telegram";
 export async function handleOnrampSettled(
   orderId: string,
   settledAmount?: string,
+  settlementTxHash?: string,
 ): Promise<void> {
   const record = await getOnrampOrder(orderId);
   if (!record) {
@@ -66,6 +68,16 @@ export async function handleOnrampSettled(
     return;
   }
 
+  await recordLedgerEntry({
+    direction: "onramp",
+    wallet: "base_hot_wallet",
+    chain: "base",
+    asset: "USDC",
+    amount,
+    txHash: settlementTxHash || "unknown",
+    orderId,
+  });
+
   try {
     await updateOnrampOrder(orderId, {
       status: "bridging",
@@ -81,18 +93,22 @@ export async function handleOnrampSettled(
       status: "bridging",
       bridgeTxHash: result.bridgeTxHash,
       bridgeStartedAt: Date.now(),
+      cctpTransferId: result.cctpTransferId,
     });
 
-    // Hand off to the finalizer cron, which watches the Allbridge transfer and
-    // flips the order to `delivered` once it confirms on Stellar.
+    // Real completion is now driven by the CCTP transfer itself (see
+    // src/lib/cctp/cctp-store.ts's own pending index, populated inside
+    // bridgeUsdcBaseToStellar) — advanced by the onramp SSE stream while a
+    // tab is open, and by the daily cron sweep as a backstop. addPendingBridge
+    // here is Allbridge-era plumbing kept for parity with pre-cutover orders;
+    // it's a harmless no-op for CCTP orders (Allbridge has no record of a
+    // CCTP burn tx hash), not the actual completion path anymore.
     await addPendingBridge(orderId);
 
     await notify(
       `Onramp <code>${orderId}</code> bridging ${amount} USDC → Stellar (tx ${result.bridgeTxHash})`,
       "success",
     );
-    // Note: final `delivered` is set by the finalizer cron once the Allbridge
-    // transfer confirms on Stellar, not here.
   } catch (err: any) {
     const reason =
       err instanceof BridgeGasError

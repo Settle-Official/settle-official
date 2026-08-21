@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { listPendingBridges } from "@/lib/onramp/onramp-store";
 import { initializeAllbridgeSdk } from "@/lib/offramp/adapters/allbridge-adapter";
 import { finalizeOnrampOrder } from "@/lib/onramp/finalize";
+import { listPendingTransfers } from "@/lib/cctp/cctp-store";
+import { advanceCctpTransfer } from "@/lib/cctp/advance";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -25,23 +27,35 @@ export async function GET(request: NextRequest) {
   }
 
   const orderIds = await listPendingBridges();
-  if (orderIds.length === 0) {
-    return NextResponse.json({ checked: 0, delivered: 0 });
-  }
-
-  const sdk = await initializeAllbridgeSdk();
-
   let delivered = 0;
   let stillPending = 0;
 
-  for (const orderId of orderIds) {
+  if (orderIds.length > 0) {
+    // Allbridge-era backstop. Left wired (not removed) since it's still the
+    // path for any order that predates the CCTP cutover, but new orders no
+    // longer populate this set — see the CCTP sweep below, which now covers
+    // both onramp and offramp regardless of this loop.
+    const sdk = await initializeAllbridgeSdk();
+    for (const orderId of orderIds) {
+      try {
+        const outcome = await finalizeOnrampOrder(sdk, orderId);
+        if (outcome === "delivered") delivered++;
+        else if (outcome === "pending") stillPending++;
+      } catch {
+        // Transient error on one order shouldn't stop the sweep.
+        stillPending++;
+      }
+    }
+  }
+
+  const cctpIds = await listPendingTransfers();
+  let cctpAdvanced = 0;
+  for (const id of cctpIds) {
     try {
-      const outcome = await finalizeOnrampOrder(sdk, orderId);
-      if (outcome === "delivered") delivered++;
-      else if (outcome === "pending") stillPending++;
+      await advanceCctpTransfer(id);
+      cctpAdvanced++;
     } catch {
-      // Transient error on one order shouldn't stop the sweep.
-      stillPending++;
+      // Transient error on one transfer shouldn't stop the sweep.
     }
   }
 
@@ -49,5 +63,7 @@ export async function GET(request: NextRequest) {
     checked: orderIds.length,
     delivered,
     stillPending,
+    cctpChecked: cctpIds.length,
+    cctpAdvanced,
   });
 }
