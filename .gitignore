@@ -39,3 +39,6 @@ coverage/
 Thumbs.db
 .vscode/
 .idea/
+
+# Claude Code worktrees / tool metadata
+.claude/
