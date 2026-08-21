@@ -7,6 +7,7 @@ import {
 } from "@/lib/cctp/stellar-cctp";
 import { getBurnFeeQuote } from "@/lib/cctp/iris-client";
 import { CCTP_DOMAIN } from "@/lib/cctp/constants";
+import { withRetry, isNetworkFetchError } from "@/lib/cctp/retry";
 import {
   validateAmount,
   validateAddress,
@@ -31,38 +32,45 @@ export async function POST(request: NextRequest) {
 
     const amountInt = usdcFloatToStellarInt(amount);
 
-    const allowance = await checkStellarUsdcAllowance(fromAddress);
-    if (allowance < amountInt) {
-      // Approve a generous headroom so repeat offramps skip this step —
-      // matches standard "approve once" dApp UX. 1000 USDC in Stellar subunits.
-      const approveAmount =
-        amountInt > BigInt(10_000_000_000) ? amountInt * BigInt(2) : BigInt(10_000_000_000);
-      const approveXdr = await buildApproveUsdcTx({
-        owner: fromAddress,
-        amount: approveAmount,
+    // Everything below is read-only (RPC reads, simulations, a fee quote) —
+    // no broadcast, so retrying the whole sequence once on a transient
+    // network blip (Soroban RPC or Iris) is always safe.
+    const result = await withRetry(async () => {
+      const allowance = await checkStellarUsdcAllowance(fromAddress);
+      if (allowance < amountInt) {
+        // Approve a generous headroom so repeat offramps skip this step —
+        // matches standard "approve once" dApp UX. 1000 USDC in Stellar subunits.
+        const approveAmount =
+          amountInt > BigInt(10_000_000_000) ? amountInt * BigInt(2) : BigInt(10_000_000_000);
+        const approveXdr = await buildApproveUsdcTx({
+          owner: fromAddress,
+          amount: approveAmount,
+        });
+        return { needsApproval: true as const, approveXdr };
+      }
+
+      const feeQuote = await getBurnFeeQuote({
+        sourceDomain: CCTP_DOMAIN.stellar,
+        destDomain: CCTP_DOMAIN.base,
       });
-      return NextResponse.json({ needsApproval: true, approveXdr });
-    }
+      const maxFeeStellarInt = BigInt(feeQuote.minimumFee);
 
-    const feeQuote = await getBurnFeeQuote({
-      sourceDomain: CCTP_DOMAIN.stellar,
-      destDomain: CCTP_DOMAIN.base,
-    });
-    const maxFeeStellarInt = BigInt(feeQuote.minimumFee);
+      const xdr = await buildStellarBurnTx({
+        owner: fromAddress,
+        amountFloat: amount,
+        destinationEvmAddress: toAddress,
+        maxFeeStellarInt,
+      });
 
-    const xdr = await buildStellarBurnTx({
-      owner: fromAddress,
-      amountFloat: amount,
-      destinationEvmAddress: toAddress,
-      maxFeeStellarInt,
+      return {
+        needsApproval: false as const,
+        xdr,
+        sourceToken: "USDC",
+        destinationToken: "USDC",
+      };
     });
 
-    return NextResponse.json({
-      needsApproval: false,
-      xdr,
-      sourceToken: "USDC",
-      destinationToken: "USDC",
-    });
+    return NextResponse.json(result);
   } catch (error: any) {
     let userMessage = error.message || "Failed to build transaction";
     const msg = error.message || "";
@@ -76,14 +84,12 @@ export async function POST(request: NextRequest) {
       userMessage =
         "A token transfer in the bridge contract failed during simulation. " +
         "This usually means insufficient balance for the amount + fees.";
-    } else if (/Allbridge Next API \/tx\/create failed: 5\d\d/.test(msg)) {
-      // A 5xx from Allbridge Next's own /tx/create means their bridge
-      // backend is failing to build the transaction, not a problem with our
-      // request — surface a friendly retry message instead of their raw
-      // upstream error text.
+    } else if (isNetworkFetchError(error)) {
+      // A raw fetch-level failure (DNS, connection reset, timeout) reaching
+      // the Stellar RPC or Circle's fee API — already retried once above, so
+      // this means it failed twice in a row. Not the user's fault.
       userMessage =
-        "The bridge provider is temporarily unable to process this route. " +
-        "This is an issue on Allbridge's side — please try again in a few minutes.";
+        "Couldn't reach the Stellar network or bridge service right now. Please try again in a moment.";
     }
 
     return NextResponse.json(
