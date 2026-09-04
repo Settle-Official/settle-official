@@ -8,8 +8,12 @@
  * from here — this function's job ends once the Base burn is confirmed.
  */
 
-import { submitBaseBurnWithHook, CctpBaseGasError } from "@/lib/cctp/base-cctp";
-import { getBurnFeeQuote } from "@/lib/cctp/iris-client";
+import {
+  submitBaseBurnWithHook,
+  usdcFloatToBaseInt,
+  CctpBaseGasError,
+} from "@/lib/cctp/base-cctp";
+import { getBurnFeeQuote, computeAtomicFee } from "@/lib/cctp/iris-client";
 import { CCTP_DOMAIN } from "@/lib/cctp/constants";
 import { createCctpTransfer } from "@/lib/cctp/cctp-store";
 import { randomUUID } from "crypto";
@@ -31,10 +35,12 @@ export async function bridgeUsdcBaseToStellar(params: {
     destDomain: CCTP_DOMAIN.stellar,
   });
 
+  const amountAtomic = usdcFloatToBaseInt(params.amount);
+
   const bridgeTxHash = await submitBaseBurnWithHook({
     amountFloat: params.amount,
     forwardRecipientStrkey: params.stellarAddress,
-    maxFeeBaseInt: BigInt(feeQuote.minimumFee),
+    maxFeeBaseInt: computeAtomicFee(feeQuote.minimumFeeBps, amountAtomic),
   });
 
   const cctpTransferId = randomUUID();

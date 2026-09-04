@@ -1,18 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PaycrestAdapter } from "@/lib/offramp/adapters/paycrest-adapter";
-import { getBurnFeeQuote } from "@/lib/cctp/iris-client";
+import { getBurnFeeQuote, computeAtomicFee } from "@/lib/cctp/iris-client";
 import { CCTP_DOMAIN, STELLAR_USDC_DECIMALS } from "@/lib/cctp/constants";
+import { usdcFloatToStellarInt } from "@/lib/cctp/stellar-cctp";
 import {
   validateAmount,
   validateToken,
   validateCurrency,
 } from "@/lib/offramp/utils/validation";
 
-function intToFloat(amountInt: string, decimals: number): string {
-  const value = BigInt(amountInt);
+function intToFloat(amountInt: bigint, decimals: number): string {
   const divisor = BigInt(10) ** BigInt(decimals);
-  const whole = value / divisor;
-  const fracDigits = (value % divisor).toString().padStart(decimals, "0");
+  const whole = amountInt / divisor;
+  const fracDigits = (amountInt % divisor).toString().padStart(decimals, "0");
   const fracTrimmed = fracDigits.replace(/0+$/, "");
   return fracTrimmed ? `${whole}.${fracTrimmed}` : whole.toString();
 }
@@ -50,8 +50,12 @@ export async function POST(request: NextRequest) {
       sourceDomain: CCTP_DOMAIN.stellar,
       destDomain: CCTP_DOMAIN.base,
     });
+    const amountAtomic = usdcFloatToStellarInt(amount);
     const bridgeFeeFloat = parseFloat(
-      intToFloat(feeQuote.minimumFee, STELLAR_USDC_DECIMALS),
+      intToFloat(
+        computeAtomicFee(feeQuote.minimumFeeBps, amountAtomic),
+        STELLAR_USDC_DECIMALS,
+      ),
     );
     const amountAfterBridge = parseFloat(amount) - bridgeFeeFloat;
     if (amountAfterBridge <= 0) {

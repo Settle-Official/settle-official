@@ -12,8 +12,15 @@ interface AttestationResponse {
 }
 
 export interface BurnFeeQuote {
-  /** Fee in the burn token's smallest unit (matches source-chain decimals), as a string. */
-  minimumFee: string;
+  /**
+   * Minimum Fast Transfer fee, in basis points (bps, 1/100 of a percent) of
+   * the burn amount — NOT an atomic token amount. Confirmed directly against
+   * the live API (`GET /v2/burn/USDC/fees/{src}/{dst}` returns e.g.
+   * `{"finalityThreshold":1000,"minimumFee":1.3}`), which can be a fractional
+   * number. Convert to an atomic maxFee for a given burn with
+   * `computeAtomicFee` below — never `BigInt()` this directly.
+   */
+  minimumFeeBps: number;
 }
 
 export function buildMessagesUrl(
@@ -78,7 +85,27 @@ export async function getBurnFeeQuote(params: {
   const fast = Array.isArray(data)
     ? data.find((e: any) => e.finalityThreshold === 1000)
     : undefined;
-  return { minimumFee: String(fast?.minimumFee ?? "0") };
+  const bps = Number(fast?.minimumFee ?? 0);
+  return { minimumFeeBps: Number.isFinite(bps) ? bps : 0 };
+}
+
+/**
+ * Converts a Fast Transfer fee quote (bps) into an atomic maxFee for a given
+ * burn amount, rounding up so we never submit below Circle's minimum (a
+ * too-low maxFee leaves the burn stuck unattested). `minimumFeeBps` can carry
+ * fractional precision (e.g. 1.3), so scale before dividing rather than doing
+ * float math against a bigint amount.
+ */
+export function computeAtomicFee(
+  minimumFeeBps: number,
+  amountAtomic: bigint,
+): bigint {
+  if (!Number.isFinite(minimumFeeBps) || minimumFeeBps <= 0) return BigInt(0);
+  const PRECISION = BigInt(1_000_000); // keep 6 fractional digits of the bps rate
+  const bpsScaled = BigInt(Math.round(minimumFeeBps * 1_000_000));
+  const denominator = BigInt(10_000) * PRECISION;
+  const numerator = amountAtomic * bpsScaled;
+  return (numerator + denominator - BigInt(1)) / denominator; // ceiling division
 }
 
 /** Recover an expired/stuck Fast Transfer attestation. */

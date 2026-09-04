@@ -127,12 +127,17 @@ export function FormCard({
     setQuote(null);
   }, [resetKey]);
 
-  // Fetch gas fee options on mount
+  // Fetch gas fee options — the fee is a rate of the burn amount, so refetch
+  // (debounced, same pattern as the quote fetch below) whenever amount changes.
   useEffect(() => {
     const fetchGasFees = async () => {
       setIsLoadingFees(true);
       try {
-        const res = await fetch("/api/offramp/bridge/gas-fee-options");
+        const query =
+          amount && parseFloat(amount) > 0
+            ? `?amount=${encodeURIComponent(amount)}`
+            : "";
+        const res = await fetch(`/api/offramp/bridge/gas-fee-options${query}`);
         if (res.ok) {
           const data = await res.json();
           setGasFeeOptions(data.feeOptions);
@@ -142,8 +147,9 @@ export function FormCard({
         setIsLoadingFees(false);
       }
     };
-    fetchGasFees();
-  }, []);
+    const debounce = setTimeout(fetchGasFees, 500);
+    return () => clearTimeout(debounce);
+  }, [amount]);
 
   // Fetch supported currencies on mount
   useEffect(() => {

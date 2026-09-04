@@ -5,7 +5,7 @@ import {
   buildStellarBurnTx,
   usdcFloatToStellarInt,
 } from "@/lib/cctp/stellar-cctp";
-import { getBurnFeeQuote } from "@/lib/cctp/iris-client";
+import { getBurnFeeQuote, computeAtomicFee } from "@/lib/cctp/iris-client";
 import { CCTP_DOMAIN } from "@/lib/cctp/constants";
 import { withRetry, isNetworkFetchError } from "@/lib/cctp/retry";
 import {
@@ -53,7 +53,7 @@ export async function POST(request: NextRequest) {
         sourceDomain: CCTP_DOMAIN.stellar,
         destDomain: CCTP_DOMAIN.base,
       });
-      const maxFeeStellarInt = BigInt(feeQuote.minimumFee);
+      const maxFeeStellarInt = computeAtomicFee(feeQuote.minimumFeeBps, amountInt);
 
       const xdr = await buildStellarBurnTx({
         owner: fromAddress,
