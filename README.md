@@ -12,7 +12,7 @@ Server-side state (order status, bridge progress, platform stats) is backed by *
 - Next.js 15 (App Router)
 - React 19 + TypeScript
 - Tailwind CSS v4
-- Stellar SDK + Freighter API (wallet signing)
+- Stellar SDK + Stellar Wallets Kit (wallet discovery, signing, WalletConnect on mobile)
 - Allbridge Bridge Core SDK (Base ⇄ Stellar bridging)
 - viem (Base chain transfers, custodial hot wallet)
 - Upstash Redis (order/status stores)
@@ -21,7 +21,7 @@ Server-side state (order status, bridge progress, platform stats) is backed by *
 ## Features
 
 ### Offramp (Stellar USDC → fiat)
-- Connect Stellar wallet (Freighter auto-detect first, Lobstr/WalletConnect fallback)
+- Connect Stellar wallet via Stellar Wallets Kit (Freighter, LOBSTR, xBull, Albedo, Hana, Ledger on desktop; Freighter/LOBSTR mobile over WalletConnect)
 - Get a USDC → fiat quote, verify recipient bank account
 - Build and sign the Stellar → Base bridge transaction (XDR)
 - Submit to Stellar Horizon, poll bridge status
@@ -85,7 +85,9 @@ Set values in `.env.local`:
 - `CRON_SECRET` — Vercel Cron sends this as a Bearer token to `/api/cron/finalize-onramp`
 
 **Wallet connect**
-- `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID`
+- `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` — from [dashboard.walletconnect.com](https://dashboard.walletconnect.com) (now also branded Reown). Required for mobile: phones have no browser extensions, so mobile wallets are only reachable over WalletConnect. Desktop extensions still work without it.
+
+  Add every origin the app is served from to that project's **allowed domains** — including tunnels used for mobile testing. An origin that isn't listed fails at connect time with WebSocket close code `3000 — origin not allowed`, which surfaces in the UI as a domain-allowlist message.
 
 ### 3. Run
 
