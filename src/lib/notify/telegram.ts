@@ -39,6 +39,31 @@ export function statusButton(
 }
 
 /**
+ * Button for a bridge_failed onramp alert — same status:<orderId> callback
+ * as statusButton (checkOnrampStatus does the actual dispatch by re-checking
+ * the order itself, so this never goes stale even if a lot of time passes
+ * before someone taps it), just with a label that tells you up front whether
+ * the burn already happened:
+ *
+ *   - No cctpTransferId: the order never got a CCTP transfer recorded, which
+ *     only happens after a burn confirms on-chain — so it didn't burn.
+ *     Tapping submits a fresh one.
+ *   - cctpTransferId present: a burn DID confirm and get recorded; whatever
+ *     failed happened after that. Tapping resumes it — never re-burns.
+ */
+export function bridgeFailedButton(
+  orderId: string,
+  cctpTransferId?: string,
+): InlineKeyboardMarkup {
+  return statusButton(
+    orderId,
+    cctpTransferId
+      ? "♻️ Revive transfer (burn confirmed)"
+      : "🔁 Retry bridge (new burn)",
+  );
+}
+
+/**
  * Send a Telegram message. Returns true if delivered, false otherwise.
  * Silently no-ops (returns false) when env is unconfigured so local/dev runs
  * don't error.
@@ -113,6 +138,13 @@ export async function alertManualAction(details: {
   currency?: string;
   stellarAddress?: string;
   reason?: string;
+  /**
+   * Pass the order's cctpTransferId when known at alert time so the button
+   * label tells you up front whether the burn already confirmed (see
+   * bridgeFailedButton) — e.g. when a CCTP transfer itself just exhausted
+   * its retries, vs. the bridge never getting far enough to burn at all.
+   */
+  cctpTransferId?: string;
 }): Promise<boolean> {
   const lines = [
     `<b>MANUAL ACTION NEEDED — ${escapeHtml(details.title)}</b>`,
@@ -125,13 +157,10 @@ export async function alertManualAction(details: {
   ].filter(Boolean);
 
   // Always onramp-only (offramp has no held-funds/manual-review state).
-  // Most manual-action alerts are a bridge_failed order sitting on held
-  // funds, where tapping this actually retries the bridge — label it as
-  // such rather than the more ambiguous "check status".
   return notify(
     lines.join("\n"),
     "critical",
-    statusButton(details.orderId, "🔁 Retry bridge"),
+    bridgeFailedButton(details.orderId, details.cctpTransferId),
   );
 }
 

@@ -169,6 +169,33 @@ export async function resetBridgeFailedForRetry(
   return reset;
 }
 
+/**
+ * Force a `bridge_failed` order back to `bridging` WITHOUT re-triggering a
+ * new burn — for when the underlying CCTP transfer already burned
+ * successfully (see reviveCctpTransfer in cctp-store.ts) and just needs its
+ * mint step resumed. Using resetBridgeFailedForRetry here instead would
+ * re-enter handleOnrampSettled and burn the same settled USDC a second time.
+ * No-op if the order isn't bridge_failed or has no cctpTransferId to resume.
+ */
+export async function resumeBridgingForRetry(
+  orderId: string,
+): Promise<OnrampRecord | null> {
+  const existing = await getOnrampOrder(orderId);
+  if (!existing || existing.status !== "bridge_failed" || !existing.cctpTransferId) {
+    return existing;
+  }
+  const resumed: OnrampRecord = {
+    ...existing,
+    status: "bridging",
+    failureReason: undefined,
+    staleAlerted: undefined,
+    updatedAt: Date.now(),
+  };
+  await redis.set(key(orderId), resumed, { ex: TTL_SECONDS });
+  await addPendingBridge(orderId);
+  return resumed;
+}
+
 // --- Pending-bridge tracking (for the finalizer cron) ----------------------
 
 /** Mark an order's bridge as in flight so the finalizer cron will watch it. */

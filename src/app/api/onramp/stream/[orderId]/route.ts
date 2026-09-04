@@ -7,6 +7,7 @@ import {
 } from "@/lib/onramp/onramp-store";
 import { getCctpTransfer } from "@/lib/cctp/cctp-store";
 import { advanceCctpTransfer } from "@/lib/cctp/advance";
+import { alertManualAction } from "@/lib/notify/telegram";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -98,6 +99,22 @@ export async function GET(
                 await updateOnrampOrder(orderId, {
                   status: "bridge_failed",
                   failureReason: "CCTP transfer failed after max retries",
+                });
+                // This is the primary path that flips a transfer to failed
+                // (the daily cron and manual checks are backstops), so this
+                // is where the alert has to fire or nobody hears about it.
+                // The burn already confirmed on-chain (that's the only way
+                // this CctpTransferRecord exists) — alert with the revive
+                // button, never the "new burn" one.
+                void alertManualAction({
+                  title: "Onramp bridge stuck after burn — mint never completed",
+                  orderId,
+                  amount: record.baseUsdcAmount,
+                  currency: "USDC",
+                  stellarAddress: record.userStellarAddress,
+                  reason:
+                    "CCTP transfer exhausted its retry budget after burning — safe to revive, don't retry-burn.",
+                  cctpTransferId: record.cctpTransferId,
                 });
               }
             } catch {

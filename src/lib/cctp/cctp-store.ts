@@ -109,6 +109,53 @@ export async function updateCctpTransfer(
  * the lock will finish and update the record; the next tick picks it up.
  * Auto-expires so a crashed/timed-out process can't wedge a transfer.
  */
+/**
+ * Pure transition for reviveCctpTransfer below — kept separate so the
+ * decision of "what state to resume from" is unit-testable without Redis.
+ * Resumes from wherever the record already got to: a valid attestation
+ * means retry the mint, otherwise start over from fetching one. Only
+ * meaningful for a `failed` record; returns it unchanged otherwise (the
+ * caller uses that to report "nothing to revive").
+ */
+export function computeRevivedTransfer(
+  existing: CctpTransferRecord,
+): CctpTransferRecord {
+  if (existing.status !== "failed") return existing;
+  const resumeStatus: CctpStatus =
+    existing.attestationMessage && existing.attestationSignature
+      ? "attested"
+      : "burned";
+  const { lastError: _lastError, ...rest } = existing;
+  return { ...rest, status: resumeStatus, attempts: 0, updatedAt: Date.now() };
+}
+
+/**
+ * Escape hatch for a transfer wrongly frozen `failed` — e.g. it exhausted
+ * MAX_ATTEMPTS against an operational problem (a missing hot-wallet secret,
+ * an unfunded gas floor) rather than a genuine on-chain failure. The normal
+ * update path (updateCctpTransfer/mergeCctpTransfer) refuses on purpose to
+ * touch a terminal record — that guard is what closed the original race-
+ * condition incident — so reviving one is a deliberate, explicit write that
+ * bypasses it, not something day-to-day code can trigger by accident.
+ *
+ * Returns `revived: false` (record left untouched) if it isn't currently
+ * `failed` — this is not a general-purpose status editor.
+ */
+export async function reviveCctpTransfer(
+  id: string,
+): Promise<{ revived: boolean; record: CctpTransferRecord } | null> {
+  const existing = await getCctpTransfer(id);
+  if (!existing) return null;
+  if (existing.status !== "failed") {
+    return { revived: false, record: existing };
+  }
+
+  const revived = computeRevivedTransfer(existing);
+  await redis.set(key(id), revived, { ex: TTL_SECONDS });
+  await addPendingTransfer(id);
+  return { revived: true, record: revived };
+}
+
 export async function acquireAdvanceLock(id: string): Promise<boolean> {
   const result = await redis.set(ADVANCE_LOCK_KEY(id), "1", {
     nx: true,
