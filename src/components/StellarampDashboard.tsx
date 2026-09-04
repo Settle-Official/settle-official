@@ -16,8 +16,6 @@ import {
   type OfframpStep,
 } from "@/components/TransactionProgressModal";
 import * as StellarSdk from "@stellar/stellar-sdk";
-import { MobileWalletModal } from "@/components/MobileWalletModal";
-import { isMobileDevice, isInsideFreighterBrowser } from "@/lib/stellar/wallet-adapter";
 
 /** Run a promise with a timeout. Rejects with a clear message on expiry. */
 function withTimeout<T>(
@@ -155,7 +153,6 @@ export function StellarampDashboard() {
     isConnected,
     isConnecting,
     connect,
-    connectViaWalletConnect,
     disconnect,
     signTransaction,
   } = useStellarWallet();
@@ -186,7 +183,6 @@ export function StellarampDashboard() {
     number | null
   >(null);
   const [isLoadingBalance, setIsLoadingBalance] = useState(false);
-  const [showMobileWalletModal, setShowMobileWalletModal] = useState(false);
   const [pricingState, setPricingState] = useState<{
     amount: string;
     quote: {
@@ -311,11 +307,9 @@ export function StellarampDashboard() {
     loadUsdcBalance();
   }, [wallet?.publicKey]);
 
+  // One path for every platform — the kit's modal picks the wallet and handles
+  // extension, in-app browser and mobile deep-link transports itself.
   const handleConnect = async () => {
-    if (isMobileDevice() && !isInsideFreighterBrowser()) {
-      setShowMobileWalletModal(true);
-      return;
-    }
     try {
       const connected = await connect();
       if (connected?.publicKey) {
@@ -328,12 +322,22 @@ export function StellarampDashboard() {
           .then(setPlatformStats)
           .catch(() => {});
       }
-    } catch (error) {
-          }
+    } catch (error: any) {
+      // Surface real connect failures. This used to be swallowed, which turned
+      // any misconfiguration into a silent no-op — the hardest kind of bug to
+      // report. Closing the wallet picker is a normal action, not a failure,
+      // so that one stays quiet.
+      const message: string = error?.message || "Failed to connect wallet";
+      const isUserCancelled =
+        /reject|denied|cancel|closed|dismiss|user (closed|declined)/i.test(
+          message,
+        );
+      if (!isUserCancelled) setToastError(message);
+    }
   };
 
-  const handleDisconnect = () => {
-    disconnect();
+  const handleDisconnect = async () => {
+    await disconnect();
     setUserTransactions([]);
   };
 
@@ -998,16 +1002,6 @@ export function StellarampDashboard() {
           setIsExecutingOfframp(false);
         }}
       />
-
-      {showMobileWalletModal && (
-        <MobileWalletModal
-          onClose={() => setShowMobileWalletModal(false)}
-          onConnected={(publicKey) => {
-            connectViaWalletConnect(publicKey);
-            setShowMobileWalletModal(false);
-          }}
-        />
-      )}
     </main>
   );
 }

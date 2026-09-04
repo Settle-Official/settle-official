@@ -1,68 +1,96 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { getStellarWalletAdapter, type StellarWallet, type WalletType } from "@/lib/stellar/wallet-adapter";
+import { useState, useEffect, useCallback, useRef } from "react";
+import {
+  connectWallet,
+  restoreWallet,
+  disconnectWallet,
+  onWalletStateChange,
+  hasStoredWalletSession,
+  signTransaction as signWithWallet,
+  type StellarWallet,
+} from "@/lib/stellar/wallet-adapter";
 
 export function useStellarWallet() {
   const [wallet, setWallet] = useState<StellarWallet | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const unsubscribeRef = useRef<(() => void) | null>(null);
 
-  const adapter = getStellarWalletAdapter();
-
-  useEffect(() => {
-    const existingWallet = adapter.getWallet();
-    if (existingWallet) setWallet(existingWallet);
+  // Follow kit state so an account switch in the wallet, or a disconnect from
+  // the kit's own profile modal, reaches the UI. Idempotent — the restore path
+  // and the connect path both call it, whichever happens first.
+  const subscribe = useCallback(async () => {
+    if (unsubscribeRef.current) return;
+    unsubscribeRef.current = await onWalletStateChange((next) =>
+      setWallet(next),
+    );
   }, []);
 
-  const connect = useCallback(async (walletType?: WalletType) => {
+  useEffect(() => {
+    let cancelled = false;
+
+    // Only boot the kit on mount when there's actually a session to restore;
+    // otherwise defer it to the Connect click so a first-time visitor doesn't
+    // pay to download every wallet module before they've asked for one.
+    if (hasStoredWalletSession()) {
+      (async () => {
+        // Subscribe before restoring: the kit emits current state on
+        // subscribe, so the other order lets that initial (still empty) event
+        // clobber the session we just restored.
+        await subscribe();
+        const restored = await restoreWallet();
+        if (!cancelled && restored) setWallet(restored);
+      })().catch(() => {
+        // Kit failed to initialize — leave the UI disconnected rather than
+        // blocking render; connect() surfaces the real error on click.
+      });
+    }
+
+    return () => {
+      cancelled = true;
+      unsubscribeRef.current?.();
+      unsubscribeRef.current = null;
+    };
+  }, [subscribe]);
+
+  const connect = useCallback(async () => {
     setIsConnecting(true);
     setError(null);
     try {
-      let connectedWallet: StellarWallet;
-      if (walletType === "freighter") {
-        connectedWallet = await adapter.connectFreighter();
-      } else if (walletType === "lobstr") {
-        connectedWallet = await adapter.connectLobstr();
-      } else {
-        connectedWallet = await adapter.connectAuto();
-      }
-      setWallet(connectedWallet);
-      return connectedWallet;
+      const connected = await connectWallet();
+      setWallet(connected);
+      await subscribe();
+      return connected;
     } catch (err: any) {
-      setError(err.message || "Failed to connect wallet");
+      setError(err?.message || "Failed to connect wallet");
       throw err;
     } finally {
       setIsConnecting(false);
     }
-  }, []);
-
-  /** Called after WalletConnect session is approved — sets wallet state directly. */
-  const connectViaWalletConnect = useCallback((publicKey: string) => {
-    const connectedWallet = adapter.connectWalletConnect(publicKey);
-    setWallet(connectedWallet);
-    return connectedWallet;
-  }, []);
+  }, [subscribe]);
 
   const disconnect = useCallback(async () => {
-    if (wallet?.type === "walletconnect") {
-      const { disconnectWalletConnect } = await import("@/lib/stellar/walletconnect-adapter");
-      await disconnectWalletConnect();
-    }
-    adapter.disconnect();
-    setWallet(null);
-    setError(null);
-  }, [wallet]);
-
-  const signTransaction = useCallback(async (xdr: string): Promise<string> => {
-    if (!wallet) throw new Error("No wallet connected");
     try {
-      return await adapter.signTransaction(xdr);
-    } catch (err: any) {
-      setError(err.message || "Failed to sign transaction");
-      throw err;
+      await disconnectWallet();
+    } finally {
+      setWallet(null);
+      setError(null);
     }
-  }, [wallet]);
+  }, []);
+
+  const signTransaction = useCallback(
+    async (xdr: string): Promise<string> => {
+      if (!wallet) throw new Error("No wallet connected");
+      try {
+        return await signWithWallet(xdr, wallet.publicKey);
+      } catch (err: any) {
+        setError(err?.message || "Failed to sign transaction");
+        throw err;
+      }
+    },
+    [wallet],
+  );
 
   return {
     wallet,
@@ -70,7 +98,6 @@ export function useStellarWallet() {
     isConnecting,
     error,
     connect,
-    connectViaWalletConnect,
     disconnect,
     signTransaction,
   };
