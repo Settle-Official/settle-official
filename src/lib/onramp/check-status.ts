@@ -10,11 +10,15 @@
  * to the legacy Allbridge finalizer so in-flight pre-cutover orders still
  * resolve correctly.
  *
- * If the order is `bridge_failed`, this actually retries the bridge (via
- * retryOnrampBridge) instead of just re-reporting the frozen failureReason
- * from whenever it originally failed — otherwise tapping "Check status"
- * after fixing the underlying issue (e.g. funding hot-wallet gas) would
- * forever echo the same stale error.
+ * If the order is `bridge_failed`, this actually retries it instead of just
+ * re-reporting the frozen failureReason from whenever it originally failed —
+ * otherwise tapping "Check status" after fixing the underlying issue (e.g.
+ * funding hot-wallet gas) would forever echo the same stale error. Which
+ * retry is correct depends on whether a burn already confirmed: with a
+ * cctpTransferId on the order, it did (that field is only ever set after
+ * one lands on-chain — see handleOnrampSettled), so this resumes the
+ * existing transfer (reviveStuckTransfer) rather than submitting a second
+ * burn (retryOnrampBridge) for the same settled USDC.
  */
 
 import { getOnrampOrder, updateOnrampOrder } from "./onramp-store";
@@ -23,6 +27,8 @@ import { retryOnrampBridge } from "./retry-bridge";
 import { initializeAllbridgeSdk } from "@/lib/offramp/adapters/allbridge-adapter";
 import { getCctpTransfer } from "@/lib/cctp/cctp-store";
 import { advanceCctpTransfer } from "@/lib/cctp/advance";
+import { reviveStuckTransfer } from "@/lib/cctp/revive";
+import { alertManualAction } from "@/lib/notify/telegram";
 
 export interface StatusCheckResult {
   message: string;
@@ -58,7 +64,25 @@ export async function checkOnrampStatus(
         status: "bridge_failed",
         failureReason: "CCTP transfer failed after max retries",
       });
-      return { message: "Failed — CCTP transfer exhausted retries", level: "warning" };
+      // The burn already confirmed on-chain (that's the only way this
+      // CctpTransferRecord exists) — this is specifically a stuck
+      // attest/mint. Alert directly (rather than letting the caller's
+      // generic notify fire) so the revive button actually gets attached.
+      await alertManualAction({
+        title: "Onramp bridge stuck after burn — mint never completed",
+        orderId,
+        amount: record.baseUsdcAmount,
+        currency: "USDC",
+        stellarAddress: record.userStellarAddress,
+        reason:
+          "CCTP transfer exhausted its retry budget after burning — safe to revive, don't retry-burn.",
+        cctpTransferId: record.cctpTransferId,
+      });
+      return {
+        message: "Failed — CCTP transfer exhausted retries",
+        level: "warning",
+        alreadyAlerted: true,
+      };
     }
     return {
       message: `Order ${orderId} is still bridging (CCTP status: ${cctpStatus}).`,
@@ -85,6 +109,15 @@ export async function checkOnrampStatus(
   }
 
   if (record.status === "bridge_failed") {
+    if (record.cctpTransferId) {
+      // A burn already confirmed and got a transfer record — resume it,
+      // never submit a second burn for the same settled USDC. Doesn't send
+      // its own alert, so the caller's generic notify(result.message) is
+      // the only message (no alreadyAlerted).
+      const result = await reviveStuckTransfer(record.cctpTransferId, orderId);
+      return { message: result.message, level: result.ok ? "success" : "warning" };
+    }
+    // No confirmed burn on record — safe to submit a fresh one.
     // handleOnrampSettled (called inside retryOnrampBridge) already sends
     // its own success/failure alert, so this is always toast-only.
     const result = await retryOnrampBridge(orderId);
