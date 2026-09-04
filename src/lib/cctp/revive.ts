@@ -9,9 +9,11 @@
  * incident) correctly refuses to let normal code move it again, so recovery
  * has to be this explicit.
  *
- * Shared by the admin HTTP endpoint; not wired into the Telegram bot since
- * this is rarer and messier than a plain retry-bridge (it needs judgment
- * about whether attempts were exhausted for a real vs. operational reason).
+ * Shared by the admin HTTP endpoint and the Telegram `/revive` command, same
+ * pattern as retry-bridge.ts. Judgment call for whoever triggers it: this
+ * assumes MAX_ATTEMPTS was exhausted for an operational reason (now fixed),
+ * not a genuine, still-present on-chain problem — reviving into the same
+ * dead end just burns through the retry budget again.
  */
 
 import {

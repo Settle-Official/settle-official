@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { retryOnrampBridge } from "@/lib/onramp/retry-bridge";
 import { checkOnrampStatus } from "@/lib/onramp/check-status";
+import { reviveStuckTransfer } from "@/lib/cctp/revive";
 import { notify, answerCallbackQuery } from "@/lib/notify/telegram";
 
 export const runtime = "nodejs";
@@ -8,9 +9,20 @@ export const maxDuration = 60;
 
 /**
  * Inbound Telegram commands + button taps:
- *   - `/retry <orderId> [amount]` — re-trigger a stuck onramp bridge.
+ *   - `/retry <orderId> [amount]` — re-trigger a stuck onramp bridge. Goes
+ *     through handleOnrampSettled, i.e. submits a brand new burn — right for
+ *     "the bridge attempt never got anywhere" (gas error, missing amount,
+ *     etc), wrong for a transfer that already burned and just needs its mint
+ *     step resumed. Use `/revive` for that case instead.
+ *   - `/revive <transferId> [orderId]` — recover a CCTP transfer wrongly
+ *     frozen `failed` (e.g. it exhausted its retry budget against a missing
+ *     secret/gas balance, not a real on-chain failure). Resumes from
+ *     wherever it already got to — never re-burns. Pass `orderId` (from the
+ *     order's own alert) for onramp so the owning order gets un-stuck too;
+ *     find `transferId` via the CctpTransferRecord id (its own alert if one
+ *     was sent, or the order's `cctpTransferId` field).
  *   - "Check status" inline button (callback_data `status:<orderId>`) on
- *     every onramp alert — re-checks Allbridge on the spot instead of
+ *     every onramp alert — re-checks the bridge on the spot instead of
  *     waiting on the once-daily cron or an open SSE tab.
  *
  * Register once (replace TOKEN/deployment/secret):
@@ -70,6 +82,17 @@ export async function POST(request: NextRequest) {
   }
 
   if (allowedChatId && String(chatId) !== String(allowedChatId)) {
+    return NextResponse.json({ ok: true });
+  }
+
+  const reviveMatch = text.trim().match(/^\/revive\s+(\S+)(?:\s+(\S+))?/i);
+  if (reviveMatch) {
+    const [, transferId, orderId] = reviveMatch;
+    const result = await reviveStuckTransfer(transferId, orderId);
+    await notify(
+      `Revive <code>${transferId}</code>: ${result.message}`,
+      result.ok ? "success" : "warning",
+    );
     return NextResponse.json({ ok: true });
   }
 
