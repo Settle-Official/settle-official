@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { STATUS_RANK, mergeCctpTransfer, type CctpTransferRecord } from "./cctp-store";
+import {
+  STATUS_RANK,
+  mergeCctpTransfer,
+  computeRevivedTransfer,
+  type CctpTransferRecord,
+} from "./cctp-store";
 
 test("status rank is monotonically increasing through the happy path", () => {
   assert.ok(STATUS_RANK.burned < STATUS_RANK.attesting);
@@ -52,4 +57,34 @@ test("mergeCctpTransfer also freezes an already-failed record", () => {
   const merged = mergeCctpTransfer(existing, { status: "attesting" });
   assert.equal(merged.status, "failed");
   assert.equal(merged.lastError, "first failure");
+});
+
+test("computeRevivedTransfer resumes at 'attested' when a valid attestation was already fetched", () => {
+  // Exact incident shape: burn succeeded, Circle attested it, but the mint
+  // step exhausted MAX_ATTEMPTS against a missing hot-wallet secret.
+  const existing = fakeRecord({
+    status: "failed",
+    attempts: 20,
+    lastError: "CCTP_STELLAR_HOT_WALLET_SECRET not configured",
+    attestationMessage: "0xmsg",
+    attestationSignature: "0xsig",
+  });
+  const revived = computeRevivedTransfer(existing);
+  assert.equal(revived.status, "attested");
+  assert.equal(revived.attempts, 0);
+  assert.equal(revived.lastError, undefined);
+  assert.equal(revived.attestationMessage, "0xmsg");
+});
+
+test("computeRevivedTransfer resumes at 'burned' when no attestation was ever fetched", () => {
+  const existing = fakeRecord({ status: "failed", attempts: 20, lastError: "network error" });
+  const revived = computeRevivedTransfer(existing);
+  assert.equal(revived.status, "burned");
+  assert.equal(revived.attempts, 0);
+});
+
+test("computeRevivedTransfer leaves a non-failed record untouched", () => {
+  const existing = fakeRecord({ status: "attesting", attempts: 3 });
+  const revived = computeRevivedTransfer(existing);
+  assert.deepEqual(revived, existing);
 });
